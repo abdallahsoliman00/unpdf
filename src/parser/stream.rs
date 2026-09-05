@@ -88,7 +88,7 @@ impl From<&ParseOptions> for PageStreamOptions {
         Self {
             error_mode: o.error_mode,
             extract_mode: o.extract_mode,
-            extract_resources: o.extract_resources,
+            extract_resources: o.effective_extract_resources(),
             min_image_dimension: o.min_image_dimension,
             pages: o.pages.clone(),
             password: o.password.clone(),
@@ -319,6 +319,11 @@ where
         password: opts.password.clone(),
         parallel: opts.parallel,
         suppress_low_confidence_ocr: opts.suppress_low_confidence_ocr,
+        // AI post-processing runs once over the assembled `Document` in
+        // `PdfParser::parse` (see `ai_wiring`), not per-page here — `extract_resources`
+        // above already carries whatever image-byte decoding it forced.
+        #[cfg(feature = "ai")]
+        ai: None,
     };
 
     // 3. 실행

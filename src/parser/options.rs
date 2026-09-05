@@ -40,6 +40,17 @@ pub struct ParseOptions {
     /// scan — that layer decodes to meaningless characters, which are worse than
     /// no text at all. Default `true`; set `false` to keep the raw layer.
     pub suppress_low_confidence_ocr: bool,
+
+    /// VLM-based image understanding — text/table scans get structured extraction,
+    /// other images get a context-aware description filled into `alt_text`.
+    /// `None` (the default) leaves parsing unchanged; the AI endpoint is only
+    /// ever contacted when this is `Some`.
+    ///
+    /// Setting this forces internal image-byte decoding for the pages/images the
+    /// AI call needs, regardless of `extract_resources` — that flag still governs
+    /// whether the resulting resource inventory is kept in the output.
+    #[cfg(feature = "ai")]
+    pub ai: Option<unparser_shared::ai::AiConfig>,
 }
 
 impl ParseOptions {
@@ -114,6 +125,27 @@ impl ParseOptions {
         self.min_image_dimension = min_px;
         self
     }
+
+    /// Enable VLM-based image understanding, contacting the endpoint `config`
+    /// describes. `None` (the default) leaves parsing unchanged.
+    #[cfg(feature = "ai")]
+    pub fn with_ai(mut self, config: unparser_shared::ai::AiConfig) -> Self {
+        self.ai = Some(config);
+        self
+    }
+
+    /// Whether image bytes must be decoded during parsing: the user-requested
+    /// `extract_resources`, or forced on because `ai` needs image bytes to send.
+    pub(crate) fn effective_extract_resources(&self) -> bool {
+        #[cfg(feature = "ai")]
+        {
+            self.extract_resources || self.ai.is_some()
+        }
+        #[cfg(not(feature = "ai"))]
+        {
+            self.extract_resources
+        }
+    }
 }
 
 impl Default for ParseOptions {
@@ -127,6 +159,8 @@ impl Default for ParseOptions {
             pages: PageSelection::All,
             password: None,
             suppress_low_confidence_ocr: true,
+            #[cfg(feature = "ai")]
+            ai: None,
         }
     }
 }
@@ -178,6 +212,22 @@ mod tests {
         assert_eq!(o.min_image_dimension, 0);
         let o = ParseOptions::new().with_min_image_dimension(200);
         assert_eq!(o.min_image_dimension, 200);
+    }
+
+    #[cfg(feature = "ai")]
+    #[test]
+    fn test_ai_is_none_by_default() {
+        let options = ParseOptions::default();
+        assert!(options.ai.is_none());
+    }
+
+    #[cfg(feature = "ai")]
+    #[test]
+    fn test_with_ai_sets_config() {
+        let config = unparser_shared::ai::AiConfig::new("https://example.test", "key", "model");
+        let options = ParseOptions::new().with_ai(config);
+        assert!(options.ai.is_some());
+        assert_eq!(options.ai.unwrap().base_url, "https://example.test");
     }
 
     #[test]

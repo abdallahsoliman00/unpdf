@@ -92,6 +92,17 @@ pub struct ExtractionQuality {
     /// unless this is checked.
     #[serde(default)]
     pub unsupported_image_count: usize,
+
+    /// Times AI processing (VLM image understanding or AI refine) fell back to the
+    /// non-AI result — a transport failure, a non-success status, a truncated or
+    /// malformed response, or retries exhausted (`unparser_shared::ai::Error`'s
+    /// variants, collapsed: this crate does not distinguish the cause).
+    ///
+    /// `ParseOptions::ai`/`RenderOptions::ai_refine` must be `Some` for this to ever
+    /// be non-zero; extraction always succeeds regardless — a fallback lowers this
+    /// count, never turns the result into an error.
+    #[serde(default)]
+    pub ai_fallback_count: usize,
 }
 
 impl ExtractionQuality {
@@ -214,6 +225,7 @@ pub struct QualityAccumulator {
     suppressed_ocr_pages: usize,
     suppressed_text_runs: usize,
     unsupported_image_count: usize,
+    ai_fallback_count: usize,
 }
 
 impl QualityAccumulator {
@@ -252,6 +264,12 @@ impl QualityAccumulator {
         self.unsupported_image_count += count;
     }
 
+    /// Record that an AI call (VLM image understanding or AI refine) fell back to
+    /// the non-AI result.
+    pub fn note_ai_fallback(&mut self) {
+        self.ai_fallback_count += 1;
+    }
+
     pub fn finalize(self) -> ExtractionQuality {
         ExtractionQuality {
             char_count: self.char_count,
@@ -260,6 +278,7 @@ impl QualityAccumulator {
             suppressed_ocr_pages: self.suppressed_ocr_pages,
             suppressed_text_runs: self.suppressed_text_runs,
             unsupported_image_count: self.unsupported_image_count,
+            ai_fallback_count: self.ai_fallback_count,
             ..Default::default()
         }
     }
@@ -298,6 +317,14 @@ mod tests {
         assert_eq!(got.char_count, expected.char_count);
         assert_eq!(got.word_count, expected.word_count);
         assert_eq!(got.replacement_char_count, expected.replacement_char_count);
+    }
+
+    #[test]
+    fn accumulator_notes_ai_fallback() {
+        let mut acc = QualityAccumulator::new();
+        acc.note_ai_fallback();
+        acc.note_ai_fallback();
+        assert_eq!(acc.finalize().ai_fallback_count, 2);
     }
 
     #[test]

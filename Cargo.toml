@@ -31,6 +31,10 @@ fast-parse = []  # Enable nom_parser for faster PDF parsing
 # CommonMark parser). On by default for native/CLI/FFI builds; unpdf-wasm
 # excludes it (see its Cargo.toml) to keep the wasm bundle delta negligible.
 refine = ["dep:unrefine"]
+# VLM image understanding + AI refine (ParseOptions.ai / RenderOptions.ai_refine).
+# Native-only — unparser-shared's `ai` feature depends on `ureq`, which does not
+# support wasm32-unknown-unknown. unpdf-wasm never enables this feature.
+ai = ["dep:unparser-shared"]
 
 [dependencies]
 # Serialization
@@ -69,6 +73,11 @@ tokio = { version = "1.42", features = ["rt", "fs"], optional = true }
 
 # Lossless, idempotent markdown shape-refinement pass (RenderOptions.refine)
 unrefine = { version = "0.1", optional = true }
+
+# VLM image understanding + AI refine (feature "ai"). Temporary third shared
+# dependency alongside uncore/unrefine — U-10 4번(unparser-shared 하나만 의존하도록
+# 전환)이 정리할 예정인 알려진 과도기(claudedocs/HANDOFF.md HD-19).
+unparser-shared = { version = "0.2", default-features = false, features = ["ai"], optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = "1.10"

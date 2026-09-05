@@ -42,6 +42,14 @@ pub struct RenderOptions {
     #[cfg(feature = "refine")]
     pub refine: Option<unrefine::RefineOptions>,
 
+    /// AI-assisted markdown refine — a generative rewrite pass applied after
+    /// `refine`. Unlike `refine`, not lossless/idempotent by construction: a
+    /// generative rewrite cannot guarantee either. `None` (the default) leaves
+    /// output unchanged; the AI endpoint is only ever contacted when this is
+    /// `Some`.
+    #[cfg(feature = "ai")]
+    pub ai_refine: Option<AiRefineOptions>,
+
     /// Page selection
     pub page_selection: PageSelection,
 
@@ -122,6 +130,17 @@ impl RenderOptions {
         self
     }
 
+    /// Enable the AI-assisted markdown refine pass, contacting the endpoint
+    /// `config` describes. Runs after `refine`, if that is also enabled.
+    #[cfg(feature = "ai")]
+    pub fn with_ai_refine(mut self, config: unparser_shared::ai::AiConfig) -> Self {
+        self.ai_refine = Some(AiRefineOptions {
+            config,
+            instructions: None,
+        });
+        self
+    }
+
     /// Enable minimal cleanup (Unicode normalization only).
     pub fn with_minimal_cleanup(mut self) -> Self {
         self.cleanup = Some(CleanupOptions::from_preset(super::CleanupPreset::Minimal));
@@ -187,6 +206,8 @@ impl Default for RenderOptions {
             cleanup: Some(CleanupOptions::standard()), // Enable standard cleanup by default
             #[cfg(feature = "refine")]
             refine: None,
+            #[cfg(feature = "ai")]
+            ai_refine: None,
             page_selection: PageSelection::All,
             line_width: 0,
             collect_stats: false,
@@ -207,6 +228,17 @@ impl RenderOptions {
         self.page_markers = style;
         self
     }
+}
+
+/// Options for the AI-assisted markdown refine pass (`RenderOptions::ai_refine`).
+#[cfg(feature = "ai")]
+#[derive(Debug, Clone)]
+pub struct AiRefineOptions {
+    /// Endpoint/credentials/model to call.
+    pub config: unparser_shared::ai::AiConfig,
+    /// Extra guidance appended to the system prompt (e.g. domain-specific
+    /// terminology to preserve). `None` by default.
+    pub instructions: Option<String>,
 }
 
 /// Style for page boundary markers in Markdown output.
@@ -349,6 +381,23 @@ mod tests {
     fn test_page_marker_style_default_is_none() {
         let options = RenderOptions::new();
         assert_eq!(options.page_markers, PageMarkerStyle::None);
+    }
+
+    #[cfg(feature = "ai")]
+    #[test]
+    fn test_ai_refine_is_none_by_default() {
+        let options = RenderOptions::default();
+        assert!(options.ai_refine.is_none());
+    }
+
+    #[cfg(feature = "ai")]
+    #[test]
+    fn test_with_ai_refine_sets_config() {
+        let config = unparser_shared::ai::AiConfig::new("https://example.test", "key", "model");
+        let options = RenderOptions::new().with_ai_refine(config);
+        let ai_refine = options.ai_refine.expect("ai_refine set");
+        assert_eq!(ai_refine.config.base_url, "https://example.test");
+        assert!(ai_refine.instructions.is_none());
     }
 
     #[test]
