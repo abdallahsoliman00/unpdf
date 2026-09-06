@@ -112,6 +112,22 @@ public sealed class ExtractionQuality
     /// </summary>
     [JsonPropertyName("unsupported_image_count")]
     public long UnsupportedImageCount { get; init; }
+
+    /// <summary>
+    /// Times VLM image understanding fell back to the non-AI result — a transport
+    /// failure, a non-success status, a truncated or malformed response, or retries
+    /// exhausted. The cause is not distinguished.
+    /// <para>
+    /// AI parse options must be configured for this to ever be non-zero, and extraction
+    /// always succeeds regardless: a fallback lowers this count, it never turns the
+    /// result into an error. Non-zero therefore means "the output is the non-AI result
+    /// for N images", which is a quality signal rather than a failure.
+    /// </para>
+    /// The render-side AI refine pass is not counted here — it runs after this record is
+    /// final and reports its own fallbacks through a warning log instead.
+    /// </summary>
+    [JsonPropertyName("ai_fallback_count")]
+    public long AiFallbackCount { get; init; }
 }
 
 /// <summary>
