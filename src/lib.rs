@@ -62,6 +62,14 @@ pub use render::{
     CleanupOptions, CleanupPreset, JsonFormat, PageMarkerStyle, PageSelection, RenderOptions,
     TableFallback,
 };
+#[cfg(feature = "ai")]
+pub use render::AiRefineOptions;
+// `ParseOptions::with_ai` and `RenderOptions::with_ai_refine` both take an
+// `AiConfig`, so callers must be able to name it without adding a direct
+// dependency on the shared crate (which would also have to be kept in version
+// lockstep with this one).
+#[cfg(feature = "ai")]
+pub use unparser_shared::ai::{AiConfig, ImageScope};
 
 use std::io::Read;
 #[cfg(not(target_arch = "wasm32"))]

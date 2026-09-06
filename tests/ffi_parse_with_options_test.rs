@@ -186,3 +186,75 @@ fn parse_file_with_options_reaches_extract_resources_too() {
 
     let _ = std::fs::remove_file(&path);
 }
+
+/// The three AI credential fields go together. A partial set is rejected up front
+/// rather than silently ignored — the same contract the CLI enforces, so a typo in
+/// one binding does not look like a model that found nothing to say.
+#[cfg(feature = "ai")]
+#[test]
+fn partial_ai_configuration_is_rejected_with_invalid_argument() {
+    let bytes = jpeg_pdf(100, 100);
+    for options in [
+        r#"{"ai_model":"m"}"#,
+        r#"{"ai_base_url":"http://localhost","ai_api_key":"k"}"#,
+        r#"{"ai_base_url":"http://localhost","ai_model":"m"}"#,
+    ] {
+        let options = cstr(options);
+        unsafe {
+            let doc = unpdf_parse_bytes_with_options(bytes.as_ptr(), bytes.len(), options.as_ptr());
+            assert!(doc.is_null(), "accepted a half-supplied AI configuration");
+            assert_eq!(unpdf_last_error_kind(), UNPDF_ERROR_INVALID_ARGUMENT);
+        }
+    }
+}
+
+/// `ai_image_scope` alone does nothing without credentials, so accepting it would
+/// silently do nothing at all.
+#[cfg(feature = "ai")]
+#[test]
+fn image_scope_without_credentials_is_rejected() {
+    let bytes = jpeg_pdf(100, 100);
+    let options = cstr(r#"{"ai_image_scope":"all"}"#);
+    unsafe {
+        let doc = unpdf_parse_bytes_with_options(bytes.as_ptr(), bytes.len(), options.as_ptr());
+        assert!(doc.is_null());
+        assert_eq!(unpdf_last_error_kind(), UNPDF_ERROR_INVALID_ARGUMENT);
+    }
+}
+
+/// A complete AI configuration is accepted and reaches parsing. The endpoint here is
+/// closed, so every call fails and falls back — which is the point: a failed AI call
+/// must never fail extraction, and the fallback is counted in the quality stats.
+#[cfg(feature = "ai")]
+#[test]
+fn complete_ai_configuration_parses_and_falls_back_when_the_endpoint_is_unreachable() {
+    let port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    let bytes = jpeg_pdf(100, 100);
+    let options = cstr(&format!(
+        r#"{{"extract_resources":true,"ai_base_url":"http://127.0.0.1:{port}",
+            "ai_api_key":"unused","ai_model":"unused","ai_image_scope":"low_confidence_pages_only"}}"#
+    ));
+    unsafe {
+        let doc = unpdf_parse_bytes_with_options(bytes.as_ptr(), bytes.len(), options.as_ptr());
+        assert!(!doc.is_null(), "a failed AI call must not fail extraction");
+        assert_eq!(unpdf_resource_count(doc), 1);
+        unpdf_free_document(doc);
+    }
+}
+
+/// Absent AI fields keep AI disabled — the default — so existing callers that never
+/// heard of these fields are unaffected.
+#[test]
+fn options_without_ai_fields_still_parse() {
+    let bytes = jpeg_pdf(100, 100);
+    let options = cstr(r#"{"extract_resources":true}"#);
+    unsafe {
+        let doc = unpdf_parse_bytes_with_options(bytes.as_ptr(), bytes.len(), options.as_ptr());
+        assert!(!doc.is_null());
+        assert_eq!(unpdf_resource_count(doc), 1);
+        unpdf_free_document(doc);
+    }
+}

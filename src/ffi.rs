@@ -101,6 +101,180 @@ fn render_options_from_flags(flags: u32) -> RenderOptions {
     options
 }
 
+/// Deserializable mirror of [`RenderOptions`] for `unpdf_to_markdown_with_options`.
+///
+/// The flag bitmask above reaches four of `RenderOptions`' settings; this reaches all of
+/// the ones a C-ABI caller can meaningfully set, and is the only way to pass the AI refine
+/// pass its credentials. Same contract as [`FfiParseOptions`]: every field is optional and
+/// an absent one keeps `RenderOptions::default()`'s value.
+///
+/// # Schema
+///
+/// ```json
+/// {
+///   "image_path_prefix": string,
+///   "table_fallback": "markdown" | "html" | "ascii",
+///   "max_heading_level": number,
+///   "include_frontmatter": bool,
+///   "preserve_line_breaks": bool,
+///   "escape_special_chars": bool,
+///   "cleanup_preset": "minimal" | "standard" | "aggressive",
+///   "refine": bool,
+///   "line_width": number,
+///   "page_markers": "none" | "comment",
+///   "pages": "all" | { "range": { "from": number, "to": number } } | { "pages": [number, ...] },
+///   "ai_refine": {
+///     "base_url": string,
+///     "api_key": string,
+///     "model": string,
+///     "instructions": string
+///   }
+/// }
+/// ```
+///
+/// `ai_refine`'s three credential fields are all required when the object is present —
+/// the same rule [`FfiParseOptions`] applies to its own `ai_*` fields.
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+struct FfiRenderOptions {
+    image_path_prefix: Option<String>,
+    table_fallback: Option<FfiTableFallback>,
+    max_heading_level: Option<u8>,
+    include_frontmatter: Option<bool>,
+    preserve_line_breaks: Option<bool>,
+    escape_special_chars: Option<bool>,
+    cleanup_preset: Option<FfiCleanupPreset>,
+    #[cfg(feature = "refine")]
+    refine: Option<bool>,
+    line_width: Option<u32>,
+    page_markers: Option<FfiPageMarkerStyle>,
+    pages: Option<FfiPageSelection>,
+    #[cfg(feature = "ai")]
+    ai_refine: Option<FfiAiRefine>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum FfiTableFallback {
+    Markdown,
+    Html,
+    Ascii,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum FfiCleanupPreset {
+    Minimal,
+    Standard,
+    Aggressive,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum FfiPageMarkerStyle {
+    None,
+    Comment,
+}
+
+#[cfg(feature = "ai")]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+struct FfiAiRefine {
+    base_url: String,
+    api_key: String,
+    model: String,
+    instructions: Option<String>,
+}
+
+impl TryFrom<FfiRenderOptions> for RenderOptions {
+    type Error = String;
+
+    fn try_from(ffi: FfiRenderOptions) -> Result<Self, Self::Error> {
+        let mut options = RenderOptions::default();
+        if let Some(prefix) = ffi.image_path_prefix {
+            options.image_path_prefix = prefix;
+        }
+        if let Some(fallback) = ffi.table_fallback {
+            options.table_fallback = match fallback {
+                FfiTableFallback::Markdown => crate::TableFallback::Markdown,
+                FfiTableFallback::Html => crate::TableFallback::Html,
+                FfiTableFallback::Ascii => crate::TableFallback::Ascii,
+            };
+        }
+        if let Some(level) = ffi.max_heading_level {
+            if !(1..=6).contains(&level) {
+                return Err(format!("max_heading_level must be 1-6, got {level}"));
+            }
+            options.max_heading_level = level;
+        }
+        if let Some(v) = ffi.include_frontmatter {
+            options.include_frontmatter = v;
+        }
+        if let Some(v) = ffi.preserve_line_breaks {
+            options.preserve_line_breaks = v;
+        }
+        if let Some(v) = ffi.escape_special_chars {
+            options.escape_special_chars = v;
+        }
+        if let Some(preset) = ffi.cleanup_preset {
+            options = options.with_cleanup_preset(match preset {
+                FfiCleanupPreset::Minimal => crate::CleanupPreset::Minimal,
+                FfiCleanupPreset::Standard => crate::CleanupPreset::Standard,
+                FfiCleanupPreset::Aggressive => crate::CleanupPreset::Aggressive,
+            });
+        }
+        #[cfg(feature = "refine")]
+        if ffi.refine == Some(true) {
+            options = options.with_refine();
+        }
+        if let Some(v) = ffi.line_width {
+            options.line_width = v;
+        }
+        if let Some(style) = ffi.page_markers {
+            options.page_markers = match style {
+                FfiPageMarkerStyle::None => PageMarkerStyle::None,
+                FfiPageMarkerStyle::Comment => PageMarkerStyle::Comment,
+            };
+        }
+        if let Some(pages) = ffi.pages {
+            options.page_selection = match pages {
+                FfiPageSelection::All => PageSelection::All,
+                FfiPageSelection::Range { from, to } => PageSelection::Range(from..=to),
+                FfiPageSelection::Pages(list) => PageSelection::Pages(list),
+            };
+        }
+        #[cfg(feature = "ai")]
+        if let Some(ai) = ffi.ai_refine {
+            options = options.with_ai_refine(crate::AiConfig::new(
+                ai.base_url,
+                ai.api_key,
+                ai.model,
+            ));
+            if let Some(instructions) = ai.instructions {
+                if let Some(opts) = options.ai_refine.as_mut() {
+                    opts.instructions = Some(instructions);
+                }
+            }
+        }
+        Ok(options)
+    }
+}
+
+/// Resolve the `options_json` argument for the markdown entry points.
+/// A null pointer means "use defaults" — it is not an error.
+///
+/// # Safety
+/// `ptr` must be null or a valid null-terminated UTF-8 string.
+unsafe fn render_options_from_json(ptr: *const c_char) -> Result<RenderOptions, FfiError> {
+    if ptr.is_null() {
+        return Ok(RenderOptions::default());
+    }
+    let json = uncore::with_c_str!(ptr)?;
+    let ffi = serde_json::from_str::<FfiRenderOptions>(json)
+        .map_err(|e| invalid_argument(format!("invalid options_json: {e}")))?;
+    RenderOptions::try_from(ffi).map_err(|e| invalid_argument(format!("invalid options_json: {e}")))
+}
+
 /// JSON format options.
 pub const UNPDF_JSON_PRETTY: c_int = 0;
 pub const UNPDF_JSON_COMPACT: c_int = 1;
@@ -194,9 +368,18 @@ pub unsafe extern "C" fn unpdf_parse_bytes(data: *const u8, len: usize) -> *mut 
 ///   "parallel": bool,
 ///   "pages": "all" | { "range": { "from": number, "to": number } } | { "pages": [number, ...] },
 ///   "password": string,
-///   "suppress_low_confidence_ocr": bool
+///   "suppress_low_confidence_ocr": bool,
+///   "ai_base_url": string,
+///   "ai_api_key": string,
+///   "ai_model": string,
+///   "ai_image_scope": "all" | "low_confidence_pages_only"
 /// }
 /// ```
+///
+/// The three `ai_*` credential fields go together: supplying only some of them is
+/// rejected rather than silently ignored, so a typo cannot look like a model that
+/// found nothing to say. Supplying none of them leaves AI disabled, which is the
+/// default. `ai_image_scope` without them is likewise rejected.
 #[derive(serde::Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 struct FfiParseOptions {
@@ -208,6 +391,32 @@ struct FfiParseOptions {
     pages: Option<FfiPageSelection>,
     password: Option<String>,
     suppress_low_confidence_ocr: Option<bool>,
+    #[cfg(feature = "ai")]
+    ai_base_url: Option<String>,
+    #[cfg(feature = "ai")]
+    ai_api_key: Option<String>,
+    #[cfg(feature = "ai")]
+    ai_model: Option<String>,
+    #[cfg(feature = "ai")]
+    ai_image_scope: Option<FfiImageScope>,
+}
+
+#[cfg(feature = "ai")]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum FfiImageScope {
+    All,
+    LowConfidencePagesOnly,
+}
+
+#[cfg(feature = "ai")]
+impl From<FfiImageScope> for crate::ImageScope {
+    fn from(scope: FfiImageScope) -> Self {
+        match scope {
+            FfiImageScope::All => crate::ImageScope::All,
+            FfiImageScope::LowConfidencePagesOnly => crate::ImageScope::LowConfidencePagesOnly,
+        }
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -233,8 +442,10 @@ enum FfiPageSelection {
     Pages(Vec<u32>),
 }
 
-impl From<FfiParseOptions> for ParseOptions {
-    fn from(ffi: FfiParseOptions) -> Self {
+impl TryFrom<FfiParseOptions> for ParseOptions {
+    type Error = String;
+
+    fn try_from(ffi: FfiParseOptions) -> Result<Self, Self::Error> {
         let mut options = ParseOptions::default();
         if let Some(mode) = ffi.error_mode {
             options.error_mode = match mode {
@@ -271,7 +482,42 @@ impl From<FfiParseOptions> for ParseOptions {
         if let Some(v) = ffi.suppress_low_confidence_ocr {
             options.suppress_low_confidence_ocr = v;
         }
-        options
+
+        #[cfg(feature = "ai")]
+        {
+            match (ffi.ai_base_url, ffi.ai_api_key, ffi.ai_model) {
+                (None, None, None) => {
+                    if ffi.ai_image_scope.is_some() {
+                        return Err(
+                            "ai_image_scope requires ai_base_url, ai_api_key and ai_model".into(),
+                        );
+                    }
+                }
+                (Some(base_url), Some(api_key), Some(model)) => {
+                    let mut config = crate::AiConfig::new(base_url, api_key, model);
+                    if let Some(scope) = ffi.ai_image_scope {
+                        config.image_scope = scope.into();
+                    }
+                    options.ai = Some(config);
+                }
+                (base_url, api_key, model) => {
+                    let missing: Vec<&str> = [
+                        ("ai_base_url", base_url.is_none()),
+                        ("ai_api_key", api_key.is_none()),
+                        ("ai_model", model.is_none()),
+                    ]
+                    .into_iter()
+                    .filter_map(|(field, absent)| absent.then_some(field))
+                    .collect();
+                    return Err(format!(
+                        "incomplete AI configuration — also required: {}",
+                        missing.join(", ")
+                    ));
+                }
+            }
+        }
+
+        Ok(options)
     }
 }
 
@@ -285,9 +531,9 @@ unsafe fn parse_options_from_json(ptr: *const c_char) -> Result<ParseOptions, Ff
         return Ok(ParseOptions::default());
     }
     let json = uncore::with_c_str!(ptr)?;
-    serde_json::from_str::<FfiParseOptions>(json)
-        .map(ParseOptions::from)
-        .map_err(|e| invalid_argument(format!("invalid options_json: {e}")))
+    let ffi = serde_json::from_str::<FfiParseOptions>(json)
+        .map_err(|e| invalid_argument(format!("invalid options_json: {e}")))?;
+    ParseOptions::try_from(ffi).map_err(|e| invalid_argument(format!("invalid options_json: {e}")))
 }
 
 /// Parse a document from a file path, with options.
@@ -378,6 +624,31 @@ uncore::export_string_getter!(
     {
         let document = &(*doc).inner;
         let options = render_options_from_flags(flags);
+        crate::render::to_markdown(document, &options).map_err(ffi_err)
+    }
+);
+
+uncore::export_string_getter!(
+    /// Convert a document to Markdown, with options.
+    ///
+    /// The counterpart to `unpdf_to_markdown`'s flag bitmask, which reaches only four
+    /// settings and cannot carry the AI refine pass's credentials. `unpdf_to_markdown`
+    /// keeps working unchanged; this is the surface for everything the bitmask cannot
+    /// express.
+    ///
+    /// # Safety
+    ///
+    /// - `doc` must be a valid document handle.
+    /// - `options_json` may be null (equivalent to default options) or a valid
+    ///   null-terminated UTF-8 JSON string matching [`FfiRenderOptions`]'s schema
+    ///   (see that type's docs).
+    /// - Returns null on error, including malformed `options_json`. Use `unpdf_last_error`.
+    /// - The returned string must be freed with `unpdf_free_string`.
+    LAST_ERROR,
+    unpdf_to_markdown_with_options(doc: UnpdfDocument, options_json: *const c_char),
+    {
+        let document = &(*doc).inner;
+        let options = render_options_from_json(options_json)?;
         crate::render::to_markdown(document, &options).map_err(ffi_err)
     }
 );

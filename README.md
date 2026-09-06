@@ -235,6 +235,7 @@ unpdf convert document.pdf --window 4
 | `--keep-ocr-text` | Keep a scan's OCR text layer even when it recognised nothing readable | false |
 | `--cleanup` | Text cleanup: `minimal`, `standard`, `aggressive` | none |
 | `--page-markers` | Insert `<!-- page N -->` markers | false |
+| `--ai-base-url`, `--ai-api-key`, `--ai-model`, `--ai-image-scope`, `--ai-refine` | See [AI-assisted extraction](#ai-assisted-extraction). Configuring these switches `convert` to a buffered parse | off |
 | `-q, --quiet` | Suppress progress and warnings | false |
 
 ### Convert to Markdown
@@ -270,9 +271,11 @@ unpdf markdown document.pdf --page-markers -o output.md
 | `-f, --frontmatter` | Include YAML frontmatter | false |
 | `--table-mode` | Table rendering: `markdown`, `html`, `ascii` | markdown |
 | `--cleanup` | Text cleanup: `minimal`, `standard`, `aggressive` | none |
+| `--refine` | Apply the markdown shape-refinement pass | false |
 | `--max-heading` | Maximum heading level (1-6) | 6 |
 | `--pages` | Page range (e.g., `1-10`, `1,3,5`) | all |
 | `--page-markers` | Insert `<!-- page N -->` markers at page boundaries | false |
+| `--ai-base-url`, `--ai-api-key`, `--ai-model`, `--ai-image-scope`, `--ai-refine` | See [AI-assisted extraction](#ai-assisted-extraction) | off |
 | `-q, --quiet` | Suppress quality warnings (root-level flag: `unpdf --quiet markdown ...`) | false |
 
 ### Convert to Plain Text
@@ -297,6 +300,54 @@ unpdf json document.pdf -o output.json
 # Compact JSON
 unpdf json document.pdf --compact -o output.json
 ```
+
+### AI-assisted extraction
+
+Optional, off by default, and entirely inert until an endpoint is configured — without
+these flags the output is byte-identical to a build that never had them.
+
+Pointing `unpdf` at an OpenAI-compatible endpoint lets a vision model describe images
+the text layer cannot represent: a full-page scan with no extractable text, a chart, a
+photo. Tables recovered this way keep their merged-cell structure, which Markdown's own
+table syntax cannot express.
+
+```bash
+# Describe every parsed image
+unpdf markdown document.pdf \
+  --ai-base-url https://api.example.com/v1 \
+  --ai-api-key "$MY_KEY" \
+  --ai-model some-vision-model \
+  -o output.md
+
+# Only pages the low-confidence OCR gate flagged (cheaper, narrower)
+unpdf markdown scan.pdf --ai-image-scope low-confidence-only ... -o out.md
+
+# Additionally run the rendered markdown through an AI refine pass
+unpdf markdown document.pdf --ai-refine ... -o out.md
+```
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--ai-base-url` | Endpoint base URL, without a trailing `/chat/completions` | — |
+| `--ai-api-key` | Bearer token. Also read from `UNPDF_AI_API_KEY` | — |
+| `--ai-model` | Model name to request | — |
+| `--ai-image-scope` | `all`, or `low-confidence-only` | `all` |
+| `--ai-refine` | Run an AI refine pass over the rendered markdown | false |
+
+The first three go together: supplying only some of them is an error rather than a
+silent fallback, so a typo cannot look like a model that simply found nothing to say.
+
+**Availability.** The passes run over a fully assembled document, so they are offered on
+every command that produces one: `convert`, `markdown`, `text` and `json`. `convert`
+normally streams pages to keep memory flat; configuring AI switches it to a buffered
+parse, since a run making a vision-model call per page is not one whose bottleneck is
+resident memory. Output is otherwise unchanged — same files, same bytes. `--ai-refine`
+rewrites markdown, so it is offered only where markdown is rendered (`convert` and
+`markdown`). When a call fails, extraction still succeeds with the original content and
+the failure is counted in `extraction_quality.ai_fallback_count`.
+
+Requires the `ai` cargo feature, which is on by default. Library consumers who want
+neither the feature nor its HTTP dependency can opt out with `default-features = false`.
 
 ### Show Document Information
 
@@ -1091,6 +1142,8 @@ Complete document structure with metadata:
 | Feature | Description | Default |
 |---------|-------------|---------|
 | `fast-parse` | Enable optimised nom-based PDF tokeniser | Yes |
+| `refine` | Markdown shape-refinement pass (`RenderOptions::refine`) | Yes |
+| `ai` | VLM image understanding and AI refine — see [AI-assisted extraction](#ai-assisted-extraction). Inert without an endpoint; adds an HTTP dependency | Yes |
 | `ffi` | C-ABI foreign function interface | No |
 | `async` | Async I/O with Tokio | No |
 

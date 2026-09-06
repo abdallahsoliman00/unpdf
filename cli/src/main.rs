@@ -15,6 +15,91 @@ use unpdf::{
 };
 use unpdf::{PageStreamOptions, ParseEvent, PdfParser};
 
+/// Credentials and scope for the VLM-backed image-understanding pass.
+///
+/// Flattened into every subcommand that materialises a whole document, since the
+/// pass runs after parsing completes. All three of `--ai-base-url`,
+/// `--ai-api-key` and `--ai-model` must be present for the pass to run at all;
+/// supplying none of them leaves output byte-identical to a build without them.
+#[derive(Parser, Debug, Clone, Default)]
+pub struct AiArgs {
+    /// OpenAI-compatible endpoint base URL (without a trailing
+    /// `/chat/completions`). Enables VLM image understanding together with
+    /// --ai-api-key and --ai-model.
+    #[arg(long, value_name = "URL")]
+    pub ai_base_url: Option<String>,
+
+    /// Bearer token for the AI endpoint.
+    #[arg(long, value_name = "KEY", env = "UNPDF_AI_API_KEY")]
+    pub ai_api_key: Option<String>,
+
+    /// Model name to request from the AI endpoint.
+    #[arg(long, value_name = "MODEL")]
+    pub ai_model: Option<String>,
+
+    /// Which parsed images to send to the model.
+    #[arg(long, value_enum, default_value = "all")]
+    pub ai_image_scope: AiImageScope,
+}
+
+/// Which images the VLM pass is invoked for.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Default, ValueEnum)]
+pub enum AiImageScope {
+    /// Every parsed image resource (quality first).
+    #[default]
+    All,
+    /// Only pages the low-confidence OCR gate flagged as a text-free full-page
+    /// scan (cost/latency first).
+    LowConfidenceOnly,
+}
+
+impl From<AiImageScope> for unpdf::ImageScope {
+    fn from(scope: AiImageScope) -> Self {
+        match scope {
+            AiImageScope::All => unpdf::ImageScope::All,
+            AiImageScope::LowConfidenceOnly => unpdf::ImageScope::LowConfidencePagesOnly,
+        }
+    }
+}
+
+impl AiArgs {
+    /// Builds the config the AI passes need, or `None` when the run is not
+    /// configured for AI at all.
+    ///
+    /// Returns an error when the three required flags are supplied only in
+    /// part: a half-configured endpoint is a typo, not a request to stay
+    /// disabled, and silently skipping the pass would look like the model
+    /// simply found nothing to say.
+    fn to_config(&self) -> Result<Option<unpdf::AiConfig>, String> {
+        match (
+            self.ai_base_url.as_deref(),
+            self.ai_api_key.as_deref(),
+            self.ai_model.as_deref(),
+        ) {
+            (None, None, None) => Ok(None),
+            (Some(base_url), Some(api_key), Some(model)) => {
+                let mut config = unpdf::AiConfig::new(base_url, api_key, model);
+                config.image_scope = self.ai_image_scope.into();
+                Ok(Some(config))
+            }
+            (base_url, api_key, model) => {
+                let missing: Vec<&str> = [
+                    ("--ai-base-url", base_url.is_none()),
+                    ("--ai-api-key (or UNPDF_AI_API_KEY)", api_key.is_none()),
+                    ("--ai-model", model.is_none()),
+                ]
+                .into_iter()
+                .filter_map(|(flag, absent)| absent.then_some(flag))
+                .collect();
+                Err(format!(
+                    "incomplete AI configuration — also required: {}",
+                    missing.join(", ")
+                ))
+            }
+        }
+    }
+}
+
 /// Arguments for the `convert` subcommand.
 #[derive(Parser, Debug)]
 pub struct ConvertArgs {
@@ -34,6 +119,14 @@ pub struct ConvertArgs {
     /// link/image paths, frontmatter, section anchors)
     #[arg(long)]
     pub refine: bool,
+
+    #[command(flatten)]
+    pub ai: AiArgs,
+
+    /// Additionally run the rendered markdown through an AI refine pass,
+    /// using the same credentials as the AI flags above
+    #[arg(long)]
+    pub ai_refine: bool,
 
     /// Output formats (comma-separated: md,txt,json)
     #[arg(long, value_delimiter = ',', default_value = "md")]
@@ -96,6 +189,14 @@ struct Cli {
     #[arg(long)]
     refine: bool,
 
+    #[command(flatten)]
+    ai: AiArgs,
+
+    /// Additionally run the rendered markdown through an AI refine pass,
+    /// using the same credentials as the AI flags above
+    #[arg(long)]
+    ai_refine: bool,
+
     /// Suppress warning messages
     #[arg(short, long)]
     quiet: bool,
@@ -137,6 +238,14 @@ enum Commands {
         #[arg(long)]
         refine: bool,
 
+        #[command(flatten)]
+        ai: AiArgs,
+
+        /// Additionally run the rendered markdown through an AI refine pass,
+        /// using the same credentials as the AI flags above
+        #[arg(long)]
+        ai_refine: bool,
+
         /// Maximum heading level (1-6)
         #[arg(long, default_value = "6")]
         max_heading: u8,
@@ -169,6 +278,9 @@ enum Commands {
         #[arg(long)]
         refine: bool,
 
+        #[command(flatten)]
+        ai: AiArgs,
+
         /// Page range (e.g., "1-10", "1,3,5")
         #[arg(long)]
         pages: Option<String>,
@@ -187,6 +299,9 @@ enum Commands {
         /// Output compact JSON
         #[arg(long)]
         compact: bool,
+
+        #[command(flatten)]
+        ai: AiArgs,
     },
 
     /// Show document information
@@ -317,6 +432,8 @@ fn main() {
             table_mode,
             cleanup,
             refine,
+            ai,
+            ai_refine,
             max_heading,
             pages,
             page_markers,
@@ -327,6 +444,8 @@ fn main() {
             table_mode,
             cleanup,
             refine,
+            &ai,
+            ai_refine,
             max_heading,
             pages.as_deref(),
             page_markers,
@@ -337,16 +456,25 @@ fn main() {
             output,
             cleanup,
             refine,
+            ai,
             pages,
         }) => {
             let _ = refine;
-            cmd_text(&input, output.as_deref(), cleanup, pages.as_deref(), quiet)
+            cmd_text(
+                &input,
+                output.as_deref(),
+                cleanup,
+                &ai,
+                pages.as_deref(),
+                quiet,
+            )
         }
         Some(Commands::Json {
             input,
             output,
             compact,
-        }) => cmd_json(&input, output.as_deref(), compact, quiet),
+            ai,
+        }) => cmd_json(&input, output.as_deref(), compact, &ai, quiet),
         Some(Commands::Info { input }) => cmd_info(&input, quiet),
         Some(Commands::Extract {
             input,
@@ -372,6 +500,8 @@ fn main() {
                     output: cli.output,
                     cleanup: cli.cleanup,
                     refine: cli.refine,
+                    ai: cli.ai.clone(),
+                    ai_refine: cli.ai_refine,
                     formats: vec!["md".to_string()],
                     all: false,
                     no_images: false,
@@ -476,12 +606,33 @@ fn cmd_convert(args: &ConvertArgs) -> Result<bool, Box<dyn std::error::Error>> {
         render_opts = render_opts.with_page_markers(unpdf::PageMarkerStyle::Comment);
     }
 
+    let ai_config = args.ai.to_config()?;
+    if args.ai_refine && ai_config.is_none() {
+        return Err("--ai-refine needs --ai-base-url, --ai-api-key and --ai-model".into());
+    }
+    if args.ai_refine {
+        if let Some(config) = ai_config.clone() {
+            render_opts = render_opts.with_ai_refine(config);
+        }
+    }
+
     // Open parser
     let mut parse_options = ParseOptions::new()
         .lenient()
         .with_ocr_suppression(!args.keep_ocr_text);
     if image_dir.is_some() {
         parse_options = parse_options.with_resources(true);
+    }
+    if let Some(config) = ai_config {
+        // The AI passes run over an assembled document, which the streaming
+        // pipeline below never produces. Buffer instead — a run paying for VLM
+        // calls per page is not the run whose bottleneck is resident memory.
+        // `min_image_dimension` moves onto the parse options here because the
+        // streaming path takes it from `PageStreamOptions` instead.
+        parse_options = parse_options
+            .with_ai(config)
+            .with_min_image_dimension(args.min_image_size);
+        return convert_buffered(args, parse_options, render_opts, &out_dir, &formats, image_dir);
     }
     let parser = PdfParser::open_with_options(&args.input, parse_options)?;
 
@@ -555,6 +706,71 @@ fn cmd_convert(args: &ConvertArgs) -> Result<bool, Box<dyn std::error::Error>> {
     let summary = mfw.finish()?;
     pb.finish_with_message("Done");
 
+    Ok(report_convert_result(
+        args,
+        &summary,
+        image_dir.as_deref(),
+        quality.as_ref(),
+    ))
+}
+
+/// `convert` for a run with AI configured.
+///
+/// Same outputs as the streaming path, assembled from a whole document instead:
+/// the AI passes need one, and the streaming pipeline never builds one (see
+/// `cmd_convert`). The writer contract is identical, so pages are handed to it
+/// in order exactly as the stream would have.
+fn convert_buffered(
+    args: &ConvertArgs,
+    parse_options: ParseOptions,
+    render_opts: RenderOptions,
+    out_dir: &Path,
+    formats: &[writer::OutputFormat],
+    image_dir: Option<PathBuf>,
+) -> Result<bool, Box<dyn std::error::Error>> {
+    let mut doc = parse_file_with_options(&args.input, parse_options)?;
+
+    let mut mfw = writer::MultiFormatWriter::new(out_dir, formats, render_opts, image_dir.clone())?;
+
+    let page_count = doc.pages.len() as u32;
+    mfw.write_document_start(&doc.metadata, page_count)?;
+
+    let pb = if args.quiet {
+        ProgressBar::hidden()
+    } else {
+        let b = ProgressBar::new(page_count as u64);
+        b.set_style(
+            ProgressStyle::default_bar()
+                .template("{bar:40.cyan/blue} {pos}/{len} pages ({eta})")
+                .unwrap(),
+        );
+        b
+    };
+
+    for page in &mut doc.pages {
+        mfw.write_page(page)?;
+        pb.inc(1);
+    }
+
+    let summary = mfw.finish()?;
+    pb.finish_with_message("Done");
+
+    Ok(report_convert_result(
+        args,
+        &summary,
+        image_dir.as_deref(),
+        Some(&doc.extraction_quality),
+    ))
+}
+
+/// Prints what `convert` produced and returns whether a quality warning fired,
+/// which the caller turns into the process exit code.
+fn report_convert_result(
+    args: &ConvertArgs,
+    summary: &writer::WriteSummary,
+    image_dir: Option<&Path>,
+    quality: Option<&unpdf::ExtractionQuality>,
+) -> bool {
     if !args.quiet {
         for path in [&summary.md_path, &summary.txt_path, &summary.json_path]
             .into_iter()
@@ -563,7 +779,7 @@ fn cmd_convert(args: &ConvertArgs) -> Result<bool, Box<dyn std::error::Error>> {
             println!("{} {}", "✓".green(), path.display());
         }
         if summary.image_count > 0 {
-            let img_dir = image_dir.as_deref().unwrap_or_else(|| Path::new("images"));
+            let img_dir = image_dir.unwrap_or_else(|| Path::new("images"));
             println!(
                 "{} {} image{} → {}",
                 "✓".green(),
@@ -577,13 +793,13 @@ fn cmd_convert(args: &ConvertArgs) -> Result<bool, Box<dyn std::error::Error>> {
         }
     }
 
-    let warning = quality.as_ref().and_then(|q| q.warning_message());
+    let warning = quality.and_then(|q| q.warning_message());
     if let Some(warning) = &warning {
         if !args.quiet {
             eprintln!("{}: {}", "Warning".yellow().bold(), warning);
         }
     }
-    Ok(warning.is_some())
+    warning.is_some()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -594,6 +810,8 @@ fn cmd_markdown(
     table_mode: TableMode,
     cleanup: Option<CleanupLevel>,
     refine: bool,
+    ai: &AiArgs,
+    ai_refine: bool,
     max_heading: u8,
     pages: Option<&str>,
     page_markers: bool,
@@ -605,10 +823,18 @@ fn cmd_markdown(
         PageSelection::All
     };
 
+    let ai_config = ai.to_config()?;
+    if ai_refine && ai_config.is_none() {
+        return Err("--ai-refine needs --ai-base-url, --ai-api-key and --ai-model".into());
+    }
+
     // Use lenient mode to continue even if some text extraction fails
-    let options = ParseOptions::new()
+    let mut options = ParseOptions::new()
         .lenient()
         .with_pages(page_selection.clone());
+    if let Some(config) = ai_config.clone() {
+        options = options.with_ai(config);
+    }
     let doc = parse_file_with_options(input, options)?;
     let had_warnings = check_quality(&doc, quiet);
 
@@ -628,6 +854,12 @@ fn cmd_markdown(
     if refine {
         render_options = render_options.with_refine();
     }
+    if ai_refine {
+        // Guarded above: `ai_refine` without a config is rejected before parsing.
+        if let Some(config) = ai_config {
+            render_options = render_options.with_ai_refine(config);
+        }
+    }
 
     let markdown = unpdf::render::to_markdown(&doc, &render_options)?;
 
@@ -645,6 +877,7 @@ fn cmd_text(
     input: &Path,
     output: Option<&Path>,
     cleanup: Option<CleanupLevel>,
+    ai: &AiArgs,
     pages: Option<&str>,
     quiet: bool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
@@ -655,7 +888,10 @@ fn cmd_text(
     };
 
     // Use lenient mode to continue even if some text extraction fails
-    let options = ParseOptions::new().lenient().with_pages(page_selection);
+    let mut options = ParseOptions::new().lenient().with_pages(page_selection);
+    if let Some(config) = ai.to_config()? {
+        options = options.with_ai(config);
+    }
     let doc = parse_file_with_options(input, options)?;
     let had_warnings = check_quality(&doc, quiet);
 
@@ -680,10 +916,14 @@ fn cmd_json(
     input: &Path,
     output: Option<&Path>,
     compact: bool,
+    ai: &AiArgs,
     quiet: bool,
 ) -> Result<bool, Box<dyn std::error::Error>> {
     // Use lenient mode to continue even if some text extraction fails
-    let options = ParseOptions::new().lenient();
+    let mut options = ParseOptions::new().lenient();
+    if let Some(config) = ai.to_config()? {
+        options = options.with_ai(config);
+    }
     let doc = unpdf::parse_file_with_options(input, options)?;
     let had_warnings = check_quality(&doc, quiet);
 
@@ -839,4 +1079,117 @@ fn cmd_version() {
     println!();
     println!("Repository: {}", "https://github.com/iyulab/unpdf".dimmed());
     println!("License: MIT");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    /// Catches flag collisions introduced by flattening `AiArgs` into several
+    /// subcommands, which clap only reports at runtime otherwise.
+    #[test]
+    fn cli_definition_is_valid() {
+        Cli::command().debug_assert();
+    }
+
+    fn args(base_url: Option<&str>, api_key: Option<&str>, model: Option<&str>) -> AiArgs {
+        AiArgs {
+            ai_base_url: base_url.map(String::from),
+            ai_api_key: api_key.map(String::from),
+            ai_model: model.map(String::from),
+            ai_image_scope: AiImageScope::All,
+        }
+    }
+
+    #[test]
+    fn no_ai_flags_yields_no_config() {
+        assert!(args(None, None, None).to_config().unwrap().is_none());
+    }
+
+    #[test]
+    fn all_three_flags_yield_a_config() {
+        let config = args(Some("http://localhost"), Some("k"), Some("m"))
+            .to_config()
+            .unwrap()
+            .expect("all three supplied");
+        assert_eq!(config.base_url, "http://localhost");
+        assert_eq!(config.api_key, "k");
+        assert_eq!(config.model, "m");
+        assert_eq!(config.image_scope, unpdf::ImageScope::All);
+    }
+
+    #[test]
+    fn image_scope_maps_onto_the_library_enum() {
+        let mut a = args(Some("u"), Some("k"), Some("m"));
+        a.ai_image_scope = AiImageScope::LowConfidenceOnly;
+        let config = a.to_config().unwrap().unwrap();
+        assert_eq!(config.image_scope, unpdf::ImageScope::LowConfidencePagesOnly);
+    }
+
+    /// A half-supplied endpoint is a typo, not a request to stay disabled —
+    /// skipping the pass silently would look like the model found nothing.
+    #[test]
+    fn partial_config_is_an_error_naming_what_is_missing() {
+        let err = args(None, None, Some("m")).to_config().unwrap_err();
+        assert!(err.contains("--ai-base-url"), "{err}");
+        assert!(err.contains("--ai-api-key"), "{err}");
+        assert!(!err.contains("--ai-model"), "{err}");
+
+        let err = args(Some("u"), Some("k"), None).to_config().unwrap_err();
+        assert!(err.contains("--ai-model"), "{err}");
+        assert!(!err.contains("--ai-base-url"), "{err}");
+    }
+
+    fn subcommand_args(name: &str) -> Vec<String> {
+        Cli::command()
+            .get_subcommands()
+            .find(|c| c.get_name() == name)
+            .unwrap_or_else(|| panic!("{name} subcommand"))
+            .get_arguments()
+            .map(|a| a.get_id().to_string())
+            .collect()
+    }
+
+    /// `--ai-refine` rewrites markdown, so it belongs exactly where `--refine`
+    /// has an effect — not on `text` (whose `--refine` is already a documented
+    /// no-op) and not on `json`.
+    #[test]
+    fn ai_refine_is_scoped_to_markdown_rendering_commands() {
+        let has_ai_refine = |name: &str| subcommand_args(name).iter().any(|a| a == "ai_refine");
+        assert!(has_ai_refine("markdown"));
+        assert!(has_ai_refine("convert"), "convert renders extract.md");
+        assert!(!has_ai_refine("text"));
+        assert!(!has_ai_refine("json"));
+    }
+
+    /// Parse-time AI flags belong on every command that assembles a Document —
+    /// `json` included (its output carries both the image understanding and the
+    /// `ai_fallback_count` statistic), and `convert` included, which switches
+    /// from streaming to a buffered parse precisely so it can offer them.
+    #[test]
+    fn parse_time_ai_flags_reach_every_command_that_assembles_a_document() {
+        for name in ["convert", "markdown", "text", "json"] {
+            let args = subcommand_args(name);
+            for flag in ["ai_base_url", "ai_api_key", "ai_model", "ai_image_scope"] {
+                assert!(
+                    args.iter().any(|a| a == flag),
+                    "{name} is missing --{}",
+                    flag.replace('_', "-")
+                );
+            }
+        }
+    }
+
+    /// The commands that cannot use a parsed document's contents must not grow
+    /// the flags: `info` reads metadata only, `extract` writes image bytes.
+    #[test]
+    fn ai_flags_stay_off_commands_that_cannot_use_them() {
+        for name in ["info", "extract"] {
+            assert!(
+                !subcommand_args(name).iter().any(|a| a.starts_with("ai_")),
+                "{name} has no use for the AI passes"
+            );
+        }
+    }
 }
