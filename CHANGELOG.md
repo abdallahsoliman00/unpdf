@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.18.0 — 2026-09-06
+
+### Added
+
+- **AI-assisted extraction (`ai` feature, on by default, inert until configured).**
+  Pointing the library or CLI at an OpenAI-compatible endpoint lets a vision model
+  describe images the text layer cannot represent — a full-page scan with no
+  extractable text, a chart, a photo — and recover tables with their merged-cell
+  structure intact, which Markdown table syntax cannot express. Without an endpoint
+  configured, output is byte-identical to a build without the feature.
+  - `ParseOptions::with_ai` runs the pass over the assembled document; the streaming
+    API (`for_each_page`) deliberately does not, since it never materialises one.
+  - `RenderOptions::with_ai_refine` adds an optional AI pass over rendered markdown,
+    after the existing rule-based `refine`.
+  - A failed call never fails extraction: the original content is kept and the
+    fallback is counted in `ExtractionQuality::ai_fallback_count`, carried through the
+    JSON and FFI surfaces and exposed to both bindings — `AiFallbackCount` on the .NET
+    `ExtractionQuality` record, and the `ai_fallback_count` key Python already returns.
+  - CLI: `--ai-base-url`, `--ai-api-key` (also `UNPDF_AI_API_KEY`), `--ai-model` and
+    `--ai-image-scope` on `convert`, `markdown`, `text` and `json`, plus `--ai-refine`
+    on the two that render markdown (`convert`, `markdown`). Supplying only some of
+    the three required flags is an error rather than a silent fallback.
+  - `convert` normally streams pages; configuring AI switches it to a buffered parse,
+    because the passes need an assembled document. The outputs are unchanged — same
+    files, same bytes — and a run without AI flags still streams exactly as before.
+  - `AiConfig`, `ImageScope` and `AiRefineOptions` are re-exported from the crate
+    root, so callers do not need a direct dependency on the shared crate to name the
+    types the public API takes.
+  - C ABI: `unpdf_parse_*_with_options` accept `ai_base_url`, `ai_api_key`, `ai_model`
+    and `ai_image_scope`. A partial set is rejected with `UNPDF_ERROR_INVALID_ARGUMENT`
+    rather than silently ignored, matching the CLI.
+- **`unpdf_to_markdown_with_options`** — a JSON render-options entry point for the C ABI,
+  mirroring the existing `unpdf_parse_*_with_options` convention. The flag bitmask reaches
+  four settings and cannot carry the AI refine pass's credentials; this reaches
+  `table_fallback`, `max_heading_level`, `cleanup_preset`, `page_selection`,
+  `image_path_prefix`, `preserve_line_breaks`, `line_width` and `ai_refine` as well, none
+  of which any C-ABI-based binding could previously set. `unpdf_to_markdown` is unchanged.
+
+### Changed
+
+- The `ai` and `refine` features are now listed in the README's feature table, and
+  `--refine` is documented in the CLI's Markdown options — both were implemented but
+  undocumented.
+
 ## 0.17.0 — 2026-08-30
 
 ### Added
