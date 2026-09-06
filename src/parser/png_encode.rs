@@ -3,9 +3,9 @@
 //! any PNG/TIFF predictor) before this runs, so the only job here is wrapping the scanlines in
 //! PNG's own filter-byte-per-row + zlib + chunk/CRC framing.
 //!
-//! Scope: 8-bit-per-component `DeviceGray`/`DeviceRGB` only (see
-//! `claudedocs/unpdf/issues/ISSUE-unpdf-20260828-123513-flatedecode-images-unconditionally-dropped.md`
-//! for the staged-rollout rationale). Anything else is `None` — the caller falls back to the
+//! Scope: 8-bit-per-component `DeviceGray`/`DeviceRGB` only — the two spaces that
+//! map onto PNG colour types without a palette or a colour conversion, which keeps
+//! this encoder dependency-free. Anything else is `None` — the caller falls back to the
 //! existing raw/undecoded-drop path, which the resource-inventory layer now reports as an
 //! "unsupported image" quality signal rather than silent absence.
 

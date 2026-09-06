@@ -10,7 +10,7 @@
 //! see the per-fixture score report.
 //!
 //! Scope note: this is the 1st increment of the benchmark-infrastructure
-//! phase (`claudedocs/unpdf/cycle-logs/ROADMAP.md`). LLM-as-judge scoring
+//! phase. LLM-as-judge scoring
 //! and a public cross-tool comparison page are later increments, not this
 //! one — this increment only needs ground truth this repo can author and
 //! check into version control, which real-world PDF fixtures (undetermined

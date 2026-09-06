@@ -335,9 +335,8 @@ pub(crate) fn convert_xobject_pub(xobj: RawXObject) -> Option<Resource> {
 /// Stage-1 scope: 8-bit `DeviceGray`/`DeviceRGB` only (`backend::resolve_color_space_name`
 /// already folds `ICCBased` down to its device-equivalent by component count before this
 /// runs). `None` means "not eligible", not "encoding failed" — the caller falls back to the
-/// existing raw/undecoded-drop path. See
-/// `claudedocs/unpdf/issues/ISSUE-unpdf-20260828-123513-flatedecode-images-unconditionally-dropped.md`
-/// in the umbrella repo for the staged-rollout rationale and the follow-up scope (Indexed/CMYK).
+/// existing raw/undecoded-drop path. `Indexed` and `CMYK` colour spaces are a
+/// deliberate follow-up rather than an oversight — see [`super::png_encode`].
 fn reencode_flate_image_as_png(
     data: &[u8],
     width: Option<u32>,

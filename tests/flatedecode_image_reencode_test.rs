@@ -1,7 +1,5 @@
-//! `/FlateDecode` embedded images are re-encoded as PNG rather than unconditionally dropped —
-//! docket `#125`'s companion gap
-//! (`claudedocs/unpdf/issues/ISSUE-unpdf-20260828-123513-flatedecode-images-unconditionally-dropped.md`
-//! in the umbrella repo). Stage 1 scope: 8-bit `DeviceGray`/`DeviceRGB` (including `ICCBased`
+//! `/FlateDecode` embedded images are re-encoded as PNG rather than unconditionally
+//! dropped. Stage 1 scope: 8-bit `DeviceGray`/`DeviceRGB` (including `ICCBased`
 //! resolved to an equivalent component count), no `/DecodeParms` predictor beyond what the
 //! existing stream decompressor already reverses. Anything outside that scope must still be
 //! dropped (unchanged behavior) but counted as an "unsupported image" quality signal instead of

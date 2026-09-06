@@ -1,7 +1,6 @@
 //! FFI error classification: `unpdf_last_error_kind`.
 //!
 //! 파싱/렌더링이 **실패**했을 때 C-ABI 소비자가 사유를 문자열 매칭 없이 분류할 수 있어야 한다.
-//! (`claudedocs/issues/ISSUE-unpdf-20260723-image-only-parse-robustness.md` 기대 동작 #2)
 //!
 //! 메시지와 kind 는 언제나 함께 쓰이고 함께 지워진다 — 그 커플링이 여기서 검증하는 핵심이다.
 #![cfg(feature = "ffi")]
