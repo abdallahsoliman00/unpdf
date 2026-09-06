@@ -4,6 +4,8 @@
 #![allow(dead_code)] // 각 테스트 파일이 필요한 빌더만 사용한다.
 
 pub mod fidelity;
+#[cfg(feature = "ai")]
+pub mod mock_ai;
 
 const HELVETICA: &[u8] = b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>";
 
@@ -190,6 +192,60 @@ pub fn mixed_pdf() -> Vec<u8> {
         gray_pixel_image(),
     ];
     assemble(objects)
+}
+
+/// One page drawn as a single full-page **JPEG** image, no text operators — the
+/// same shape as [`image_only_pdf`], but with a `/DCTDecode` XObject that survives
+/// resource extraction (an unfiltered raw image is dropped as unsupported), so the
+/// image reaches `Page::images` with bytes attached.
+pub fn image_only_jpeg_pdf() -> Vec<u8> {
+    let content = b"q 595 0 0 842 0 0 cm /Im0 Do Q\n";
+    let objects: Vec<Vec<u8>> = vec![
+        b"<</Type/Catalog/Pages 2 0 R>>".to_vec(),
+        b"<</Type/Pages/Kids[3 0 R]/Count 1>>".to_vec(),
+        b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]\
+          /Resources<</XObject<</Im0 5 0 R>>>>/Contents 4 0 R>>"
+            .to_vec(),
+        stream_object(&format!("<</Length {}>>", content.len()), content),
+        jpeg_image(),
+    ];
+    assemble(objects)
+}
+
+/// One page: two paragraphs with a small inline JPEG image XObject drawn between
+/// them (not covering the page) — the "individual image on an otherwise-text page"
+/// shape wiring point B targets. `extract_resources` must be enabled to get image
+/// bytes into `Page::images`.
+pub fn text_with_inline_image_pdf() -> Vec<u8> {
+    let content = b"BT /F1 12 Tf 72 750 Td (First paragraph before the image.) Tj ET \
+        q 40 0 0 40 72 650 cm /Im0 Do Q \
+        BT /F1 12 Tf 72 600 Td (Second paragraph after the image.) Tj ET\n";
+    let objects: Vec<Vec<u8>> = vec![
+        b"<</Type/Catalog/Pages 2 0 R>>".to_vec(),
+        b"<</Type/Pages/Kids[3 0 R]/Count 1>>".to_vec(),
+        b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]\
+          /Resources<</Font<</F1 5 0 R>>/XObject<</Im0 6 0 R>>>>/Contents 4 0 R>>"
+            .to_vec(),
+        stream_object(&format!("<</Length {}>>", content.len()), content),
+        HELVETICA.to_vec(),
+        jpeg_image(),
+    ];
+    assemble(objects)
+}
+
+/// A 100×100 `/DCTDecode` image XObject. The bytes are a JPEG SOI/EOI stub, not a
+/// decodable image — `unpdf` passes `/DCTDecode` data through untouched, and the
+/// tests that use this never decode it either.
+fn jpeg_image() -> Vec<u8> {
+    let data = [0xFFu8, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0xFF, 0xD9];
+    stream_object(
+        &format!(
+            "<</Type/XObject/Subtype/Image/Width 100/Height 100/ColorSpace/DeviceGray\
+              /BitsPerComponent 8/Filter/DCTDecode/Length {}>>",
+            data.len()
+        ),
+        &data,
+    )
 }
 
 /// A 1×1 grey image XObject — the CTM it is drawn with does the scaling.

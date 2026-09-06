@@ -32,6 +32,8 @@
 //! - **Parallel processing**: Uses Rayon for multi-page documents
 //! - **Cleanup pipeline**: Text normalization for LLM training data
 
+#[cfg(feature = "ai")]
+mod ai_wiring;
 pub mod convert;
 pub mod detect;
 pub mod error;

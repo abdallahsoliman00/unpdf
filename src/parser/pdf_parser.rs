@@ -139,6 +139,21 @@ impl PdfParser {
         final_q.encrypted = document.metadata.encrypted;
         document.extraction_quality = final_q;
 
+        #[cfg(feature = "ai")]
+        if let Some(ai_config) = &self.options.ai {
+            crate::ai_wiring::apply(&mut document, ai_config);
+            // `effective_extract_resources()` may have forced image-byte decoding
+            // purely so the AI call above had bytes to send. If the caller never
+            // asked for the resource inventory itself, drop it now — the IR changes
+            // AI made (new Paragraph/Table blocks, filled alt_text) stay regardless,
+            // only the raw byte inventory is scoped to `extract_resources`.
+            if !self.options.extract_resources {
+                for page in &mut document.pages {
+                    page.images.clear();
+                }
+            }
+        }
+
         Ok(document)
     }
 
