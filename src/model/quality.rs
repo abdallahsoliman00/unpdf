@@ -93,14 +93,16 @@ pub struct ExtractionQuality {
     #[serde(default)]
     pub unsupported_image_count: usize,
 
-    /// Times AI processing (VLM image understanding or AI refine) fell back to the
-    /// non-AI result — a transport failure, a non-success status, a truncated or
-    /// malformed response, or retries exhausted (`unparser_shared::ai::Error`'s
-    /// variants, collapsed: this crate does not distinguish the cause).
+    /// Times VLM image understanding fell back to the non-AI result — a transport
+    /// failure, a non-success status, a truncated or malformed response, or retries
+    /// exhausted (`unparser_shared::ai::Error`'s variants, collapsed: this crate does
+    /// not distinguish the cause).
     ///
-    /// `ParseOptions::ai`/`RenderOptions::ai_refine` must be `Some` for this to ever
-    /// be non-zero; extraction always succeeds regardless — a fallback lowers this
-    /// count, never turns the result into an error.
+    /// `ParseOptions::ai` must be `Some` for this to ever be non-zero; extraction
+    /// always succeeds regardless — a fallback lowers this count, never turns the
+    /// result into an error. The render-side `RenderOptions::ai_refine` pass is not
+    /// counted here: it runs after this struct is final, and reports its own
+    /// fallbacks through a warning log instead.
     #[serde(default)]
     pub ai_fallback_count: usize,
 }

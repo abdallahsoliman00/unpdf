@@ -6,9 +6,9 @@
 mod common;
 
 use common::mock_ai::MockServer;
-use common::{image_only_jpeg_pdf, text_with_inline_image_pdf};
+use common::{image_only_jpeg_pdf, text_pdf, text_with_inline_image_pdf};
 use unparser_shared::ai::{AiConfig, ImageScope};
-use unpdf::{parse_bytes_with_options, Block, ParseOptions};
+use unpdf::{parse_bytes_with_options, Block, ParseOptions, RenderOptions};
 
 fn config(url: &str) -> AiConfig {
     let mut cfg = AiConfig::new(url, "test-key", "test-model");
@@ -157,6 +157,41 @@ fn resource_bytes_are_forced_then_stripped_when_extract_resources_was_not_reques
         Some("x"),
         "the AI result itself must still land even though resources were stripped"
     );
+}
+
+// --- AI refine (render path) ----------------------------------------------------
+
+#[test]
+fn ai_refine_replaces_the_rendered_markdown() {
+    let server = MockServer::serving(vec![(200, chat_response("# Rewritten\n\nBy the model."))]);
+    let doc = parse_bytes_with_options(&text_pdf(), ParseOptions::new()).unwrap();
+
+    let markdown = unpdf::render::to_markdown(
+        &doc,
+        &RenderOptions::new().with_ai_refine(config(server.url())),
+    )
+    .unwrap();
+
+    assert_eq!(markdown, "# Rewritten\n\nBy the model.");
+}
+
+#[test]
+fn ai_refine_failure_keeps_the_un_refined_markdown() {
+    let server = MockServer::serving(vec![(500, "internal error".to_string())]);
+    let doc = parse_bytes_with_options(&text_pdf(), ParseOptions::new()).unwrap();
+
+    let plain = unpdf::render::to_markdown(&doc, &RenderOptions::new()).unwrap();
+    let with_failed_ai = unpdf::render::to_markdown(
+        &doc,
+        &RenderOptions::new().with_ai_refine(config(server.url())),
+    )
+    .unwrap();
+
+    assert_eq!(
+        with_failed_ai, plain,
+        "a failed AI refine must leave the rendered markdown untouched"
+    );
+    assert!(with_failed_ai.contains("Hello World"));
 }
 
 // --- Point B: individual images on otherwise-text pages -------------------------

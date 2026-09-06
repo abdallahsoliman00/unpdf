@@ -106,6 +106,29 @@ impl MarkdownRenderer {
             None => output,
         };
 
+        // AI refine runs after rule-based refine, never instead of it: the
+        // deterministic corrections land first so the model has less to
+        // second-guess. A failed call keeps the pre-AI markdown — the rendered
+        // document is still correct, just not rewritten.
+        #[cfg(feature = "ai")]
+        let output = match self.options.ai_refine {
+            Some(ref ai_options) => {
+                let mut refine_ai = unparser_shared::ai::RefineAiOptions::default();
+                if let Some(ref instructions) = ai_options.instructions {
+                    refine_ai = refine_ai.with_instructions(instructions.clone());
+                }
+                match unparser_shared::ai::refine_markdown(&ai_options.config, &output, &refine_ai)
+                {
+                    Ok(refined) => refined,
+                    Err(e) => {
+                        log::warn!("AI refine failed, keeping the un-refined markdown: {e}");
+                        output
+                    }
+                }
+            }
+            None => output,
+        };
+
         Ok(output)
     }
 
