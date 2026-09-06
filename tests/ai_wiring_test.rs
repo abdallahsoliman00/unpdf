@@ -81,7 +81,10 @@ fn point_a_structured_response_replaces_the_image_only_page() {
 
 #[test]
 fn point_a_description_response_fills_alt_text() {
-    let server = MockServer::serving(vec![(200, chat_response(&description_body("a photo of a cat")))]);
+    let server = MockServer::serving(vec![(
+        200,
+        chat_response(&description_body("a photo of a cat")),
+    )]);
     let options = ParseOptions::new()
         .with_resources(true)
         .with_min_image_dimension(0)

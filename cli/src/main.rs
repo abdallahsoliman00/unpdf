@@ -632,7 +632,14 @@ fn cmd_convert(args: &ConvertArgs) -> Result<bool, Box<dyn std::error::Error>> {
         parse_options = parse_options
             .with_ai(config)
             .with_min_image_dimension(args.min_image_size);
-        return convert_buffered(args, parse_options, render_opts, &out_dir, &formats, image_dir);
+        return convert_buffered(
+            args,
+            parse_options,
+            render_opts,
+            &out_dir,
+            &formats,
+            image_dir,
+        );
     }
     let parser = PdfParser::open_with_options(&args.input, parse_options)?;
 
@@ -1124,7 +1131,10 @@ mod tests {
         let mut a = args(Some("u"), Some("k"), Some("m"));
         a.ai_image_scope = AiImageScope::LowConfidenceOnly;
         let config = a.to_config().unwrap().unwrap();
-        assert_eq!(config.image_scope, unpdf::ImageScope::LowConfidencePagesOnly);
+        assert_eq!(
+            config.image_scope,
+            unpdf::ImageScope::LowConfidencePagesOnly
+        );
     }
 
     /// A half-supplied endpoint is a typo, not a request to stay disabled —

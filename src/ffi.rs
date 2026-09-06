@@ -245,11 +245,8 @@ impl TryFrom<FfiRenderOptions> for RenderOptions {
         }
         #[cfg(feature = "ai")]
         if let Some(ai) = ffi.ai_refine {
-            options = options.with_ai_refine(crate::AiConfig::new(
-                ai.base_url,
-                ai.api_key,
-                ai.model,
-            ));
+            options =
+                options.with_ai_refine(crate::AiConfig::new(ai.base_url, ai.api_key, ai.model));
             if let Some(instructions) = ai.instructions {
                 if let Some(opts) = options.ai_refine.as_mut() {
                     opts.instructions = Some(instructions);

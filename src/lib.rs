@@ -58,12 +58,12 @@ pub use model::{
     ResourceType, Table, TableCell, TableRow, TextRun, TextStyle,
 };
 pub use parser::{PageStreamOptions, ParseEvent, ParseOptions, PdfParser};
+#[cfg(feature = "ai")]
+pub use render::AiRefineOptions;
 pub use render::{
     CleanupOptions, CleanupPreset, JsonFormat, PageMarkerStyle, PageSelection, RenderOptions,
     TableFallback,
 };
-#[cfg(feature = "ai")]
-pub use render::AiRefineOptions;
 // `ParseOptions::with_ai` and `RenderOptions::with_ai_refine` both take an
 // `AiConfig`, so callers must be able to name it without adding a direct
 // dependency on the shared crate (which would also have to be kept in version

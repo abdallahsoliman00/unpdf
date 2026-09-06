@@ -194,11 +194,14 @@ fn convert_with_ai_configured_produces_the_same_output_as_streaming() {
     );
 
     for name in ["extract.md", "extract.txt", "content.json"] {
-        let a = std::fs::read(streamed.join(name))
-            .unwrap_or_else(|e| panic!("streaming {name}: {e}"));
-        let b = std::fs::read(buffered.join(name))
-            .unwrap_or_else(|e| panic!("buffered {name}: {e}"));
-        assert_eq!(a, b, "{name} differs between the streaming and buffered paths");
+        let a =
+            std::fs::read(streamed.join(name)).unwrap_or_else(|e| panic!("streaming {name}: {e}"));
+        let b =
+            std::fs::read(buffered.join(name)).unwrap_or_else(|e| panic!("buffered {name}: {e}"));
+        assert_eq!(
+            a, b,
+            "{name} differs between the streaming and buffered paths"
+        );
     }
 }
 
@@ -213,7 +216,12 @@ fn partial_ai_configuration_is_rejected_on_every_command() {
 
     for command in ["convert", "markdown", "text", "json"] {
         let output = Command::new(bin())
-            .args([command, pdf.to_str().unwrap(), "--ai-model", "only-this-one"])
+            .args([
+                command,
+                pdf.to_str().unwrap(),
+                "--ai-model",
+                "only-this-one",
+            ])
             .output()
             .unwrap();
         assert!(
