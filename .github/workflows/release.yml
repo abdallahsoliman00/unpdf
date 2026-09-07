@@ -197,9 +197,35 @@ jobs:
           path: target/${{ matrix.target }}/release/${{ matrix.archive_name }}-${{ needs.check-version.outputs.version }}.${{ matrix.archive_ext }}
           retention-days: 1
 
+  binding-tests:
+    # Pre-release gate. The bindings are otherwise built, tested and published
+    # by bindings.yml, which only starts once this workflow has already created
+    # the GitHub Release and pushed to crates.io — far too late to stop a bad
+    # release. Running the same reusable workflow here with publish disabled
+    # puts that verification upstream of every irreversible publish step.
+    name: Binding Tests
+    needs: check-version
+    if: needs.check-version.outputs.should_release == 'true'
+    uses: iyulab/uncore/.github/workflows/bindings-reusable.yml@main
+    with:
+      package-name: unpdf
+      csharp-project-name: Unpdf
+      nuget-staging-mode: flat
+      nuget-test-matrix: |
+        [
+          {"os":"ubuntu-latest","artifact":"native-linux-x64","runtime":"linux-x64"},
+          {"os":"windows-latest","artifact":"native-win-x64","runtime":"win-x64"},
+          {"os":"macos-latest","artifact":"native-osx-arm64","runtime":"osx-arm64"}
+        ]
+      validate-packed-nuget: false
+      publish: false
+    permissions:
+      contents: read
+    secrets: inherit
+
   create-release:
     name: Create Release
-    needs: [check-version, build-release, build-ffi]
+    needs: [check-version, build-release, build-ffi, binding-tests]
     if: needs.check-version.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -208,9 +234,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download all artifacts
+      # Only the CLI and FFI archives belong on the release. binding-tests runs
+      # in this same workflow run and uploads native-*/python-*/nuget-package
+      # artifacts of its own; an unfiltered download would attach those too.
+      - name: Download CLI archives
         uses: actions/download-artifact@v4
         with:
+          pattern: unpdf-*
+          path: artifacts
+
+      - name: Download FFI archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: libunpdf-*
           path: artifacts
 
       - name: List artifacts
@@ -233,6 +269,10 @@ jobs:
           name: |
             unpdf-*
             libunpdf-*
+            native-*
+            python-wheel
+            python-sdist
+            nuget-package
 
   publish-crates:
     name: Publish to crates.io
@@ -245,16 +285,42 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # These two steps used to carry `continue-on-error: true`, which made a
+      # failed upload indistinguishable from a successful one: the release went
+      # green while crates.io never received the crate, and the gap only showed
+      # up when someone tried to depend on the version. Only the "already
+      # uploaded" case is tolerated now (a re-run of a version that got through);
+      # every other failure fails the job.
       - name: Publish library (unpdf)
-        run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        continue-on-error: true
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -o pipefail
+          if cargo publish 2>&1 | tee "$RUNNER_TEMP/publish-lib.log"; then
+            exit 0
+          fi
+          if grep -qiE 'already (uploaded|exists)' "$RUNNER_TEMP/publish-lib.log"; then
+            echo "::notice::unpdf is already on crates.io at this version"
+            exit 0
+          fi
+          exit 1
 
       - name: Wait for crates.io index update
         run: sleep 30
 
       - name: Publish CLI (unpdf-cli)
-        run: cargo publish -p unpdf-cli --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        continue-on-error: true
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -o pipefail
+          if cargo publish -p unpdf-cli 2>&1 | tee "$RUNNER_TEMP/publish-cli.log"; then
+            exit 0
+          fi
+          if grep -qiE 'already (uploaded|exists)' "$RUNNER_TEMP/publish-cli.log"; then
+            echo "::notice::unpdf-cli is already on crates.io at this version"
+            exit 0
+          fi
+          exit 1
 
   publish-npm:
     name: Publish to npm
@@ -306,11 +372,12 @@ jobs:
           cp bindings/wasm/README.md unpdf-wasm/pkg/
           cp LICENSE unpdf-wasm/pkg/
 
+      # No continue-on-error: a failed npm publish must fail the job, the same
+      # way it already does in undoc and unhwp. unpdf was the odd one out.
       - name: Publish to npm
         run: wasm-pack publish unpdf-wasm --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        continue-on-error: true
 
   cleanup-old-releases:
     name: Cleanup Old Releases

@@ -116,7 +116,10 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run Clippy
-        run: cargo clippy --all-features -- -D warnings
+        # --all-targets covers tests, benches and examples. Without it clippy
+        # lints only the library and binary targets, so lint debt accumulates
+        # in exactly the code that is hardest to review.
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
   # Build FFI library
   build-ffi:
