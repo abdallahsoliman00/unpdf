@@ -10,12 +10,14 @@ npm install @iyulab/unpdf
 
 ## Usage
 
+> This package is built with `wasm-pack --target bundler`. It is an ES module and the
+> WebAssembly binary is initialised for you, so there is no `init()` to await — import
+> the functions and call them. Use it through a bundler (webpack, Vite, Rollup, esbuild).
+
 ### Browser / Bundler (webpack, vite)
 
 ```js
-import init, { parse, ParseOptions } from '@iyulab/unpdf';
-
-await init();
+import { parse } from '@iyulab/unpdf';
 
 const response = await fetch('document.pdf');
 const bytes = new Uint8Array(await response.arrayBuffer());
@@ -29,9 +31,7 @@ console.log(`Pages: ${doc.pageCount()}`);
 ### With Options
 
 ```js
-import init, { parseWithOptions, ParseOptions } from '@iyulab/unpdf';
-
-await init();
+import { parseWithOptions, ParseOptions } from '@iyulab/unpdf';
 
 const opts = new ParseOptions()
   .lenient()
@@ -44,9 +44,12 @@ console.log(doc.toMarkdown());
 
 ### Node.js
 
+The bundler target is an ES module, so import it rather than `require` it, and run it
+through a bundler.
+
 ```js
-const { parse } = require('@iyulab/unpdf');
-const fs = require('fs');
+import { parse } from '@iyulab/unpdf';
+import fs from 'node:fs';
 
 const bytes = fs.readFileSync('document.pdf');
 const doc = parse(new Uint8Array(bytes));

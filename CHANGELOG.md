@@ -44,6 +44,13 @@
   `--refine` is documented in the CLI's Markdown options — both were implemented but
   undocumented.
 
+### Fixed
+
+- The WebAssembly usage examples no longer open with `import init` and `await init()`. The npm
+  package is built for bundlers, where the module initialises itself and no `init` export exists,
+  so anyone following the first example stopped on its first line. The examples now import the
+  functions directly, and the README states the bundler target once up front.
+
 ## 0.17.0 — 2026-08-30
 
 ### Added

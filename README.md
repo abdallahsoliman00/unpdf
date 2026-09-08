@@ -656,9 +656,7 @@ npm install @iyulab/unpdf
 ### Browser / Bundler (webpack, vite)
 
 ```js
-import init, { parse, ParseOptions } from '@iyulab/unpdf';
-
-await init();
+import { parse } from '@iyulab/unpdf';
 
 const response = await fetch('document.pdf');
 const bytes = new Uint8Array(await response.arrayBuffer());
@@ -683,9 +681,7 @@ console.log(doc.toText());
 ### With Options
 
 ```js
-import init, { parseWithOptions, ParseOptions } from '@iyulab/unpdf';
-
-await init();
+import { parseWithOptions, ParseOptions } from '@iyulab/unpdf';
 
 const opts = new ParseOptions()
   .lenient()
