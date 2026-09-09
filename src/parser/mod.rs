@@ -3,6 +3,7 @@
 pub mod backend;
 pub mod bidi;
 pub mod cmap_table;
+mod dedup;
 pub(crate) mod encoding;
 pub(crate) mod font;
 mod lattice;

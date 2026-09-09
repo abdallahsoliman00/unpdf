@@ -233,6 +233,52 @@ pub fn text_with_inline_image_pdf() -> Vec<u8> {
     assemble(objects)
 }
 
+/// `pages` pages, each with a line of text and **the same image XObject** — one shared object,
+/// the way a running-header logo appears in a real document.
+///
+/// The duplication this is used to exercise is not in the file: the PDF holds exactly one
+/// image, referenced from every page's resource dictionary. Any count above one downstream was
+/// produced by extraction, not read out of the document.
+pub fn repeated_logo_pdf(pages: usize) -> Vec<u8> {
+    assert!(pages >= 1, "a document has at least one page");
+
+    const FIRST_PAGE_OBJ: usize = 4;
+    let font_obj = FIRST_PAGE_OBJ + pages * 2;
+    let kids: Vec<String> = (0..pages)
+        .map(|i| format!("{} 0 R", FIRST_PAGE_OBJ + i * 2))
+        .collect();
+
+    let mut objects: Vec<Vec<u8>> = vec![
+        b"<</Type/Catalog/Pages 2 0 R>>".to_vec(),
+        format!("<</Type/Pages/Kids[{}]/Count {}>>", kids.join(" "), pages).into_bytes(),
+        // Object 3: the one image. `/DCTDecode`, because an unfiltered sample has no
+        // recognisable format and is dropped as unsupported before extraction sees it.
+        jpeg_image(),
+    ];
+
+    for i in 0..pages {
+        let content_obj = FIRST_PAGE_OBJ + i * 2 + 1;
+        objects.push(
+            format!(
+                "<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Resources\
+                 <</XObject<</Logo 3 0 R>>/Font<</F1 {font_obj} 0 R>>>>/Contents {content_obj} 0 R>>"
+            )
+            .into_bytes(),
+        );
+        let content = format!(
+            "BT /F1 12 Tf 72 700 Td (Body text on page {}.) Tj ET\nq 100 0 0 40 20 780 cm /Logo Do Q\n",
+            i + 1
+        );
+        objects.push(stream_object(
+            &format!("<</Length {}>>", content.len()),
+            content.as_bytes(),
+        ));
+    }
+    objects.push(HELVETICA.to_vec());
+
+    assemble(objects)
+}
+
 /// A 100×100 `/DCTDecode` image XObject. The bytes are a JPEG SOI/EOI stub, not a
 /// decodable image — `unpdf` passes `/DCTDecode` data through untouched, and the
 /// tests that use this never decode it either.

@@ -139,6 +139,14 @@ impl PdfParser {
         final_q.encrypted = document.metadata.encrypted;
         document.extraction_quality = final_q;
 
+        // Before anything else looks at the resources -- the AI pass below most of all, since
+        // it bills per image -- collapse entries whose bytes are identical. A shared logo would
+        // otherwise be captioned once per page it appears on.
+        if self.options.extract_resources || self.options.extract_mode != ExtractMode::StructureOnly
+        {
+            super::dedup::collapse_identical_resources(&mut document);
+        }
+
         #[cfg(feature = "ai")]
         if let Some(ai_config) = &self.options.ai {
             crate::ai_wiring::apply(&mut document, ai_config);
@@ -751,5 +759,270 @@ mod tests {
         };
 
         assert_eq!(low_confidence_row_text(&row), "Name  Value");
+    }
+    /// One shared image XObject must cost one resource entry, whatever the page count.
+    ///
+    /// The key built a few hundred lines above is `page{n}_{name}`, a key space with no way to
+    /// say "the same image", so extraction used to emit one entry per page: a logo in a 40-page
+    /// document became 40 entries, 40 copies in `page.images`, and 40 VLM calls. The counts are
+    /// checked across several page counts because the old behaviour was exactly linear in them,
+    /// and a fix that only worked for small documents would still pass a single-size check.
+    ///
+    /// The fixture is built here rather than in `tests/common/` because what is being measured
+    /// is this file's keying decision, and because a `#[cfg(test)]` unit test rides the library
+    /// test binary -- which matters on a machine whose application-control policy blocks freshly
+    /// built integration-test executables.
+    fn shared_logo_pdf(pages: usize) -> Vec<u8> {
+        let first_page_obj = 4usize;
+        let font_obj = first_page_obj + pages * 2;
+        let kids: Vec<String> = (0..pages)
+            .map(|i| format!("{} 0 R", first_page_obj + i * 2))
+            .collect();
+
+        let stream = |dict: &str, data: &[u8]| -> Vec<u8> {
+            let mut o = dict.as_bytes().to_vec();
+            o.extend_from_slice(b"\nstream\n");
+            o.extend_from_slice(data);
+            o.extend_from_slice(b"\nendstream");
+            o
+        };
+
+        let mut objects: Vec<Vec<u8>> = vec![
+            b"<</Type/Catalog/Pages 2 0 R>>".to_vec(),
+            format!("<</Type/Pages/Kids[{}]/Count {}>>", kids.join(" "), pages).into_bytes(),
+            // Object 3: the single image every page's resource dictionary points at. A
+            // `/DCTDecode` stub, because an unfiltered sample has no recognisable format and
+            // `convert_resource_xobject` drops it as unsupported before any of this matters.
+            stream(
+                "<</Type/XObject/Subtype/Image/Width 100/Height 100/ColorSpace/DeviceGray/BitsPerComponent 8/Filter/DCTDecode/Length 10>>",
+                &[0xFFu8, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0xFF, 0xD9],
+            ),
+        ];
+
+        for i in 0..pages {
+            let content_obj = first_page_obj + i * 2 + 1;
+            objects.push(
+                format!(
+                    "<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Resources<</XObject<</Logo 3 0 R>>/Font<</F1 {font_obj} 0 R>>>>/Contents {content_obj} 0 R>>"
+                )
+                .into_bytes(),
+            );
+            let content = format!(
+                "q 100 0 0 40 20 780 cm /Logo Do Q\nBT /F1 12 Tf 72 700 Td (Page {}) Tj ET\n",
+                i + 1
+            );
+            objects.push(stream(
+                &format!("<</Length {}>>", content.len()),
+                content.as_bytes(),
+            ));
+        }
+        objects.push(b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>".to_vec());
+
+        let mut pdf = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::with_capacity(objects.len());
+        for (idx, body) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n", idx + 1).as_bytes());
+            pdf.extend_from_slice(body);
+            pdf.extend_from_slice(b"\nendobj\n");
+        }
+        let xref_start = pdf.len();
+        let size = objects.len() + 1;
+        pdf.extend_from_slice(format!("xref\n0 {size}\n0000000000 65535 f \n").as_bytes());
+        for offset in &offsets {
+            pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(
+            format!("trailer\n<</Size {size}/Root 1 0 R>>\nstartxref\n{xref_start}\n%%EOF\n")
+                .as_bytes(),
+        );
+        pdf
+    }
+
+    #[test]
+    fn one_shared_image_becomes_one_resource_entry_per_page() {
+        for pages in [1usize, 2, 8, 40] {
+            let pdf = shared_logo_pdf(pages);
+            let options = ParseOptions {
+                extract_resources: true,
+                ..Default::default()
+            };
+            let doc = PdfParser::from_bytes_with_options(&pdf, options)
+                .expect("the fixture parses")
+                .parse()
+                .expect("the fixture parses");
+
+            let images: Vec<_> = doc
+                .resources
+                .values()
+                .filter(|r| !r.data.is_empty())
+                .collect();
+            let distinct: std::collections::HashSet<&[u8]> =
+                images.iter().map(|r| r.data.as_slice()).collect();
+
+            assert_eq!(
+                distinct.len(),
+                1,
+                "pages={pages}: the document holds exactly one image, whatever extraction did"
+            );
+            assert_eq!(
+                images.len(),
+                1,
+                "pages={pages}: one image in the file is one entry out, however many pages drew it"
+            );
+        }
+    }
+    #[test]
+    fn the_surviving_reference_is_the_first_occurrence_in_reading_order() {
+        // Which occurrence keeps the id has to be a property of the document, not of how many
+        // threads parsed it -- `parse_single_page` runs on a parallel path in `stream.rs`.
+        let pdf = shared_logo_pdf(6);
+        let options = ParseOptions {
+            extract_resources: true,
+            ..Default::default()
+        };
+
+        let ids: Vec<String> = (0..3)
+            .map(|_| {
+                let doc = PdfParser::from_bytes_with_options(&pdf, options.clone())
+                    .expect("the fixture parses")
+                    .parse()
+                    .expect("the fixture parses");
+                doc.pages
+                    .iter()
+                    .flat_map(|p| p.elements.iter())
+                    .find_map(|b| match b {
+                        Block::Image { resource_id, .. } => Some(resource_id.clone()),
+                        _ => None,
+                    })
+                    .expect("the logo is drawn on page 1")
+            })
+            .collect();
+
+        assert!(
+            ids[0].starts_with("page1_"),
+            "the first page's occurrence should win, got {}",
+            ids[0]
+        );
+        assert!(
+            ids.iter().all(|id| *id == ids[0]),
+            "the winner must not depend on the run: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn every_page_still_reports_its_image_and_points_at_a_resource_that_exists() {
+        // Collapsing the inventory must not cost a page its picture: each page keeps its own
+        // Image block, and the id that block carries has to resolve.
+        let pages = 5;
+        let pdf = shared_logo_pdf(pages);
+        let options = ParseOptions {
+            extract_resources: true,
+            ..Default::default()
+        };
+        let doc = PdfParser::from_bytes_with_options(&pdf, options)
+            .expect("the fixture parses")
+            .parse()
+            .expect("the fixture parses");
+
+        let known: std::collections::HashSet<&str> = doc
+            .pages
+            .iter()
+            .flat_map(|p| p.images.iter())
+            .map(|(id, _)| id.as_str())
+            .collect();
+        assert_eq!(known.len(), 1, "one picture, one surviving entry");
+
+        for page in &doc.pages {
+            let blocks: Vec<&str> = page
+                .elements
+                .iter()
+                .filter_map(|b| match b {
+                    Block::Image { resource_id, .. } => Some(resource_id.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                blocks.len(),
+                1,
+                "page {} lost its image block to deduplication",
+                page.number
+            );
+            assert!(
+                known.contains(blocks[0]),
+                "page {} points at {}, which no longer exists",
+                page.number,
+                blocks[0]
+            );
+        }
+    }
+
+    #[test]
+    fn images_that_merely_look_alike_are_kept_apart() {
+        // The whole pass turns on byte equality. A fixture whose pages carry *different*
+        // pictures must come through untouched, or deduplication is silently losing content.
+        let pdf = two_distinct_images_pdf();
+        let options = ParseOptions {
+            extract_resources: true,
+            ..Default::default()
+        };
+        let doc = PdfParser::from_bytes_with_options(&pdf, options)
+            .expect("the fixture parses")
+            .parse()
+            .expect("the fixture parses");
+
+        let images: Vec<_> = doc
+            .resources
+            .values()
+            .filter(|r| !r.data.is_empty())
+            .collect();
+        assert_eq!(images.len(), 2, "two different pictures stay two resources");
+    }
+    /// Two pages, each drawing a *different* image -- the control for the deduplication pass.
+    fn two_distinct_images_pdf() -> Vec<u8> {
+        let stream = |dict: &str, data: &[u8]| -> Vec<u8> {
+            let mut o = dict.as_bytes().to_vec();
+            o.extend_from_slice(b"\nstream\n");
+            o.extend_from_slice(data);
+            o.extend_from_slice(b"\nendstream");
+            o
+        };
+        let jpeg = |tail: u8| -> Vec<u8> {
+            stream(
+                "<</Type/XObject/Subtype/Image/Width 100/Height 100/ColorSpace/DeviceGray/BitsPerComponent 8/Filter/DCTDecode/Length 10>>",
+                &[0xFFu8, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, tail, 0xFF, 0xD9],
+            )
+        };
+
+        let objects: Vec<Vec<u8>> = vec![
+            b"<</Type/Catalog/Pages 2 0 R>>".to_vec(),
+            b"<</Type/Pages/Kids[5 0 R 7 0 R]/Count 2>>".to_vec(),
+            jpeg(0x46),
+            jpeg(0x47),
+            b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Resources<</XObject<</Pic 3 0 R>>>>/Contents 6 0 R>>".to_vec(),
+            stream("<</Length 34>>", b"q 100 0 0 40 20 780 cm /Pic Do Q\n\n"),
+            b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Resources<</XObject<</Pic 4 0 R>>>>/Contents 8 0 R>>".to_vec(),
+            stream("<</Length 34>>", b"q 100 0 0 40 20 780 cm /Pic Do Q\n\n"),
+        ];
+
+        let mut pdf = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::with_capacity(objects.len());
+        for (idx, body) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            pdf.extend_from_slice(format!("{} 0 obj\n", idx + 1).as_bytes());
+            pdf.extend_from_slice(body);
+            pdf.extend_from_slice(b"\nendobj\n");
+        }
+        let xref_start = pdf.len();
+        let size = objects.len() + 1;
+        pdf.extend_from_slice(format!("xref\n0 {size}\n0000000000 65535 f \n").as_bytes());
+        for offset in &offsets {
+            pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        pdf.extend_from_slice(
+            format!("trailer\n<</Size {size}/Root 1 0 R>>\nstartxref\n{xref_start}\n%%EOF\n")
+                .as_bytes(),
+        );
+        pdf
     }
 }

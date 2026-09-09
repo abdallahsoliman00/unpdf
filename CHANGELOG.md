@@ -41,6 +41,14 @@
 
 ### Fixed
 
+- Identical images are now one resource instead of one per page that draws them. A document
+  that shares a single image XObject across its pages — a running-header logo is the ordinary
+  case — was extracted as one resource entry, one copy in the page inventory and one output
+  file *per page*, because resources are keyed by page. A 40-page document with one logo
+  produced 40 of everything. Image references now point at the first occurrence in reading
+  order, which is stable across runs; images whose bytes differ are untouched.
+
+
 - A document whose encryption key is shorter than the cipher accepts is now reported as
   undecryptable instead of aborting the process. Object keys are truncated to
   `min(file key length + 5, 16)` bytes, so a file key under 11 bytes yields a key AES-128

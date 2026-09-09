@@ -6,7 +6,7 @@
 mod common;
 
 use common::mock_ai::MockServer;
-use common::{image_only_jpeg_pdf, text_pdf, text_with_inline_image_pdf};
+use common::{image_only_jpeg_pdf, repeated_logo_pdf, text_pdf, text_with_inline_image_pdf};
 use unparser_shared::ai::{AiConfig, ImageScope};
 use unpdf::{parse_bytes_with_options, Block, ParseOptions, RenderOptions};
 
@@ -260,4 +260,53 @@ fn low_confidence_pages_only_skips_point_b_entirely() {
         server.received_bodies().is_empty(),
         "LowConfidencePagesOnly must not send any request for a text page's images"
     );
+}
+
+#[test]
+fn a_shared_image_is_captioned_on_every_page_that_draws_it() {
+    // Deduplication leaves the bytes on the first page that used them, so a later page's image
+    // block references a resource its own `page.images` no longer holds. Resolving against the
+    // page alone finds nothing and skips the image in silence -- no error, no fallback count,
+    // just a caption that never appears. This is the test that says so out loud.
+    let pages = 3;
+    let server = MockServer::serving(
+        (0..pages)
+            .map(|_| (200, chat_response(&description_body("the company logo"))))
+            .collect(),
+    );
+    let options = ParseOptions::new()
+        .with_resources(true)
+        .with_ai(config(server.url()));
+
+    let doc = parse_bytes_with_options(&repeated_logo_pdf(pages), options).unwrap();
+
+    // One picture in, one picture out -- the deduplication is still doing its job.
+    let surviving: std::collections::HashSet<&str> = doc
+        .pages
+        .iter()
+        .flat_map(|p| p.images.iter())
+        .map(|(id, _)| id.as_str())
+        .collect();
+    assert_eq!(
+        surviving.len(),
+        1,
+        "one shared image should be one resource"
+    );
+
+    for page in &doc.pages {
+        let image = page
+            .elements
+            .iter()
+            .find(|b| matches!(b, Block::Image { .. }))
+            .unwrap_or_else(|| panic!("page {} lost its image block", page.number));
+        let Block::Image { alt_text, .. } = image else {
+            unreachable!()
+        };
+        assert_eq!(
+            alt_text.as_deref(),
+            Some("the company logo"),
+            "page {} was skipped because its resource lives on another page now",
+            page.number
+        );
+    }
 }

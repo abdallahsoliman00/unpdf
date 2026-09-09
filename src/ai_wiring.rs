@@ -10,6 +10,7 @@
 //! exists to avoid, and running post-parse sides steps it entirely rather than
 //! needing the two pools to interleave).
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rayon::prelude::*;
@@ -31,6 +32,17 @@ pub(crate) fn apply(document: &mut Document, cfg: &AiConfig) {
     let fallback_count = AtomicUsize::new(0);
     let image_scope = cfg.image_scope;
 
+    // Resources are deduplicated across the whole document before this runs, so an image block
+    // on page 5 can reference bytes that only page 1 still holds. Resolving against the page
+    // alone would find nothing and skip the image in silence -- the caption would simply not
+    // appear, with no failure anywhere to say why.
+    let shared: HashMap<String, (String, Vec<u8>)> = document
+        .pages
+        .iter()
+        .flat_map(|p| p.images.iter())
+        .map(|(id, r)| (id.clone(), (r.mime_type.clone(), r.data.clone())))
+        .collect();
+
     let mut work = || {
         document.pages.par_iter_mut().for_each(|page| {
             // Eligibility is decided once, before either point mutates the page: a
@@ -44,7 +56,7 @@ pub(crate) fn apply(document: &mut Document, cfg: &AiConfig) {
                 // Point B: individual images left over on otherwise-text pages. Only
                 // when the caller asked for full coverage — `LowConfidencePagesOnly`
                 // stops at A.
-                process_point_b(page, cfg, &fallback_count);
+                process_point_b(page, cfg, &shared, &fallback_count);
             }
         });
     };
@@ -97,7 +109,12 @@ fn process_point_a(page: &mut Page, cfg: &AiConfig, fallback_count: &AtomicUsize
     }
 }
 
-fn process_point_b(page: &mut Page, cfg: &AiConfig, fallback_count: &AtomicUsize) {
+fn process_point_b(
+    page: &mut Page,
+    cfg: &AiConfig,
+    shared: &HashMap<String, (String, Vec<u8>)>,
+    fallback_count: &AtomicUsize,
+) {
     // Reverse order: a Structured result below can change the element count at
     // `idx`, which would invalidate every later (larger) index still to process —
     // processing high-to-low keeps every not-yet-visited index valid.
@@ -114,11 +131,17 @@ fn process_point_b(page: &mut Page, cfg: &AiConfig, fallback_count: &AtomicUsize
             continue;
         };
         let resource_id = resource_id.clone();
-        let Some((_, resource)) = page.images.iter().find(|(id, _)| *id == resource_id) else {
+        // The page's own inventory first -- it is the common case and needs no allocation --
+        // then the document-wide one, which is where a deduplicated image now lives.
+        let Some((mime_type, data)) = page
+            .images
+            .iter()
+            .find(|(id, _)| *id == resource_id)
+            .map(|(_, r)| (r.mime_type.clone(), r.data.clone()))
+            .or_else(|| shared.get(&resource_id).cloned())
+        else {
             continue;
         };
-        let mime_type = resource.mime_type.clone();
-        let data = resource.data.clone();
         let preceding_text = preceding_paragraph_text(&page.elements, idx);
         let following_text = following_paragraph_text(&page.elements, idx);
         let context = ImageContext {
