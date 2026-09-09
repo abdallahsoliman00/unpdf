@@ -41,6 +41,12 @@
 
 ### Fixed
 
+- An encryption revision this build does not implement (AES-256, that is AESV3 revisions 5
+  and 6) is now reported as `UnsupportedVersion` rather than the catch-all kind. It was
+  already refused rather than mis-decrypted, but arriving as `Other` made "this build does
+  not do that" indistinguishable from any other failure. No discriminant was added: the one
+  used has been public on all three binding surfaces from the start.
+
 - Identical images are now one resource instead of one per page that draws them. A document
   that shares a single image XObject across its pages — a running-header logo is the ordinary
   case — was extracted as one resource entry, one copy in the page inventory and one output

@@ -129,10 +129,15 @@ impl RawDocument {
             }
         };
 
-        // Only support R2-R4 for now
+        // R2-R4 only: RC4 and AES-128. AES-256 (AESV3, revisions 5 and 6) is not implemented.
+        //
+        // Reported as `UnsupportedVersion` rather than the catch-all: this is exactly the case
+        // that discriminant names, it is already public on all three binding surfaces, and a
+        // caller meeting an AES-256 document otherwise cannot tell "this build does not do that
+        // yet" apart from any other failure.
         if params.revision > 4 || params.revision < 2 {
-            return Err(Error::Other(format!(
-                "PDF encryption revision {} is not yet supported",
+            return Err(Error::UnsupportedVersion(format!(
+                "encryption revision {}",
                 params.revision
             )));
         }
@@ -523,92 +528,181 @@ fn parse_int(data: &[u8], pos: usize) -> Result<(i64, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
-    /// Load the PDF fixture, or return `None` if gitignored `test-files/`
-    /// is unavailable (e.g., CI). Caller returns early from the test.
-    fn try_read(rel: &str) -> Option<Vec<u8>> {
-        if !Path::new(rel).exists() {
-            eprintln!("skipping: fixture not present at {}", rel);
-            return None;
+    /// Build a PDF here rather than reading one from disk.
+    ///
+    /// These tests used to load `test-files/basic/*.pdf` through a helper that returned `None`
+    /// when the file was missing, and every caller then returned early -- so with `test-files/`
+    /// gitignored and never present, all six reported green without executing a single
+    /// assertion. A fixture the test assembles cannot go missing, and it also says in the test
+    /// exactly which bytes the behaviour depends on.
+    fn pdf(objects: Vec<Vec<u8>>, root: usize) -> Vec<u8> {
+        let mut out = b"%PDF-1.4\n".to_vec();
+        let mut offsets = Vec::with_capacity(objects.len());
+        for (idx, body) in objects.iter().enumerate() {
+            offsets.push(out.len());
+            out.extend_from_slice(format!("{} 0 obj\n", idx + 1).as_bytes());
+            out.extend_from_slice(body);
+            out.extend_from_slice(b"\nendobj\n");
         }
-        std::fs::read(rel).ok()
+        let xref_start = out.len();
+        let size = objects.len() + 1;
+        out.extend_from_slice(format!("xref\n0 {size}\n0000000000 65535 f \n").as_bytes());
+        for offset in &offsets {
+            out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+        }
+        out.extend_from_slice(
+            format!("trailer\n<</Size {size}/Root {root} 0 R>>\nstartxref\n{xref_start}\n%%EOF\n")
+                .as_bytes(),
+        );
+        out
+    }
+
+    /// Catalog, page tree, one page, one content stream.
+    fn one_page_pdf() -> Vec<u8> {
+        pdf(
+            vec![
+                b"<</Type/Catalog/Pages 2 0 R>>".to_vec(),
+                b"<</Type/Pages/Kids[3 0 R]/Count 1>>".to_vec(),
+                b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Contents 4 0 R>>".to_vec(),
+                b"<</Length 38>>\nstream\nBT /F1 12 Tf 72 720 Td (Hi) Tj ET\n\nendstream".to_vec(),
+            ],
+            1,
+        )
     }
 
     #[test]
-    fn test_load_trivial_pdf() {
-        let Some(data) = try_read("test-files/basic/trivial.pdf") else {
-            return;
-        };
-        let doc = RawDocument::load(&data).unwrap();
-        assert!(doc.page_count() > 0);
-        assert!(!doc.version.is_empty());
+    fn a_minimal_document_reports_its_version_and_page_count() {
+        let doc = RawDocument::load(&one_page_pdf()).expect("a well-formed PDF loads");
+        assert_eq!(doc.page_count(), 1);
+        assert_eq!(
+            doc.version, "1.4",
+            "the header version is read, not guessed"
+        );
     }
 
     #[test]
-    fn test_catalog_accessible() {
-        let Some(data) = try_read("test-files/basic/trivial.pdf") else {
-            return;
+    fn the_catalog_is_reachable_and_points_at_the_page_tree() {
+        let doc = RawDocument::load(&one_page_pdf()).unwrap();
+        let catalog = doc.catalog().expect("the trailer /Root resolves");
+        assert!(
+            dict_get(catalog, b"Pages").is_some(),
+            "a catalog without /Pages would make page enumeration silently empty"
+        );
+    }
+
+    #[test]
+    fn pages_are_enumerated_from_one() {
+        let doc = RawDocument::load(&one_page_pdf()).unwrap();
+        let pages = doc.pages();
+        assert_eq!(pages.len(), 1);
+        assert!(
+            pages.contains_key(&1),
+            "page numbering is 1-indexed across this crate API"
+        );
+    }
+
+    #[test]
+    fn an_enumerated_page_resolves_to_a_page_dictionary() {
+        let doc = RawDocument::load(&one_page_pdf()).unwrap();
+        let first = doc.pages()[&1];
+        let page_dict = doc.get_dict(first).expect("the id from pages() resolves");
+        assert_eq!(
+            dict_get(page_dict, b"Type").and_then(|o| o.as_name()),
+            Some(b"Page".as_slice()),
+            "pages() must not hand back the page tree node"
+        );
+    }
+
+    #[test]
+    fn a_two_page_tree_is_walked_in_order() {
+        // One page proves almost nothing about a tree walk: a stub returning the first Kid
+        // would pass every test above.
+        let doc = RawDocument::load(&pdf(
+            vec![
+                b"<</Type/Catalog/Pages 2 0 R>>".to_vec(),
+                b"<</Type/Pages/Kids[3 0 R 4 0 R]/Count 2>>".to_vec(),
+                b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]>>".to_vec(),
+                b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>>".to_vec(),
+            ],
+            1,
+        ))
+        .unwrap();
+
+        assert_eq!(doc.page_count(), 2);
+        let pages = doc.pages();
+        assert_eq!(pages.len(), 2);
+        // The second Kid must be page 2, not a second entry for page 1.
+        assert_ne!(pages[&1], pages[&2]);
+        let second = doc.get_dict(pages[&2]).unwrap();
+        assert!(
+            format!("{:?}", dict_get(second, b"MediaBox")).contains("200"),
+            "page 2 should be the second Kid, not the first one again"
+        );
+    }
+
+    #[test]
+    fn an_encryption_revision_this_build_cannot_do_is_refused_by_kind() {
+        // AES-256 (AESV3) is revision 5 or 6. Refusing it is correct -- what matters to a
+        // caller is that the refusal is distinguishable, since the catch-all kind would make
+        // "this build does not implement that" look like any other failure.
+        let bytes = pdf(
+            vec![
+                b"<</Type/Catalog/Pages 2 0 R>>".to_vec(),
+                b"<</Type/Pages/Kids[3 0 R]/Count 1>>".to_vec(),
+                b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]>>".to_vec(),
+                b"<</Filter/Standard/V 5/R 6/Length 256/P -1/O<00>/U<00>>>".to_vec(),
+            ],
+            1,
+        );
+        // The trailer built above carries no /Encrypt, so point it at object 4.
+        let encrypted = String::from_utf8(bytes)
+            .unwrap()
+            .replace("/Root 1 0 R>>", "/Root 1 0 R/Encrypt 4 0 R>>")
+            .into_bytes();
+
+        let Err(err) = RawDocument::load(&encrypted) else {
+            panic!("revision 6 is not implemented, so loading must not succeed");
         };
-        let doc = RawDocument::load(&data).unwrap();
+        assert_eq!(
+            err.kind(),
+            crate::error::ErrorKind::UnsupportedVersion,
+            "got {err:?} -- a caller cannot branch on this if it arrives as the catch-all"
+        );
+    }
+
+    #[test]
+    fn a_document_outline_is_read_rather_than_ignored() {
+        // The test this replaces was named for outlines and asserted only that the page count
+        // was above zero -- it would have passed against a build that ignored /Outlines
+        // entirely.
+        let doc = RawDocument::load(&pdf(
+            vec![
+                b"<</Type/Catalog/Pages 2 0 R/Outlines 4 0 R>>".to_vec(),
+                b"<</Type/Pages/Kids[3 0 R]/Count 1>>".to_vec(),
+                b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]>>".to_vec(),
+                b"<</Type/Outlines/First 5 0 R/Last 5 0 R/Count 1>>".to_vec(),
+                b"<</Title(Chapter One)/Parent 4 0 R/Dest[3 0 R /Fit]>>".to_vec(),
+            ],
+            1,
+        ))
+        .unwrap();
+
         let catalog = doc.catalog().unwrap();
-        assert!(dict_get(catalog, b"Pages").is_some());
-    }
-
-    #[test]
-    fn test_pages_enumeration() {
-        let Some(data) = try_read("test-files/basic/trivial.pdf") else {
-            return;
-        };
-        let doc = RawDocument::load(&data).unwrap();
-        let pages = doc.pages();
-        assert!(!pages.is_empty());
-        assert!(pages.contains_key(&1));
-    }
-
-    #[test]
-    fn test_page_has_dict() {
-        let Some(data) = try_read("test-files/basic/trivial.pdf") else {
-            return;
-        };
-        let doc = RawDocument::load(&data).unwrap();
-        let pages = doc.pages();
-        let first_page_id = pages[&1];
-        let page_dict = doc.get_dict(first_page_id).unwrap();
-        let type_name = dict_get(page_dict, b"Type").and_then(|o| o.as_name());
-        assert_eq!(type_name, Some(b"Page".as_slice()));
-    }
-
-    #[test]
-    fn test_load_unicode_pdf() {
-        let Some(data) = try_read("test-files/basic/unicode-test.pdf") else {
-            return;
-        };
-        // This PDF is encrypted. load() now attempts decryption with empty password.
-        match RawDocument::load(&data) {
-            Ok(doc) => {
-                assert!(!doc.version.is_empty());
-            }
-            Err(e) => {
-                let msg = e.to_string();
-                assert!(
-                    msg.contains("encrypted")
-                        || msg.contains("Encrypted")
-                        || msg.contains("password")
-                        || msg.contains("supported"),
-                    "Error should be about encryption: {}",
-                    msg
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn test_load_outline_pdf() {
-        let Some(data) = try_read("test-files/basic/outline.pdf") else {
-            return;
-        };
-        let doc = RawDocument::load(&data).unwrap();
-        assert!(doc.page_count() > 0);
+        let outlines = dict_get(catalog, b"Outlines")
+            .and_then(|o| o.as_reference())
+            .expect("/Outlines is a reference in the catalog");
+        let root = doc.get_dict(outlines).expect("/Outlines resolves");
+        let first = dict_get(root, b"First")
+            .and_then(|o| o.as_reference())
+            .expect("an outline root has a first child");
+        let item = doc
+            .get_dict(first)
+            .expect("the first outline item resolves");
+        assert_eq!(
+            dict_get(item, b"Title").and_then(|o| o.as_str_bytes()),
+            Some(b"Chapter One".as_slice()),
+            "the outline item title should survive parsing"
+        );
     }
 }

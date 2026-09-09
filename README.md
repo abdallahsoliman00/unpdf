@@ -1116,7 +1116,8 @@ Complete document structure with metadata:
 | Compressed object streams (ObjStm) | Supported |
 | Cross-reference streams (XRef streams) | Supported |
 | Linearized PDFs | Supported |
-| Encrypted PDFs (RC4, AES-128) | Supported |
+| Encrypted PDFs (RC4, AES-128 — revisions 2-4) | Supported |
+| Encrypted PDFs (AES-256 — AESV3, revisions 5-6) | Not supported — refused as `ErrorKind::UnsupportedVersion` |
 | Text extraction | Supported |
 | CJK text (Korean, Chinese, Japanese) | Supported (Adobe CMap) |
 | RTL text (Arabic, Hebrew) | Supported (BiDi) |
