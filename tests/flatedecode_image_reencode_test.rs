@@ -107,11 +107,16 @@ fn flatedecode_devicergb_image_is_reencoded_as_png() {
     let resource = doc.resources.values().next().unwrap();
     assert_eq!(resource.mime_type, "image/png");
 
-    let decoder = png::Decoder::new(resource.data.as_slice());
+    let decoder = png::Decoder::new(std::io::Cursor::new(resource.data.as_slice()));
     let mut reader = decoder
         .read_info()
         .expect("valid PNG produced by the re-encoder");
-    let mut buf = vec![0u8; reader.output_buffer_size()];
+    let mut buf = vec![
+        0u8;
+        reader
+            .output_buffer_size()
+            .expect("PNG dimensions fit in a buffer")
+    ];
     let info = reader.next_frame(&mut buf).unwrap();
     buf.truncate(info.buffer_size());
     assert_eq!(buf, pixels);

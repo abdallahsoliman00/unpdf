@@ -1,5 +1,39 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Refreshed the declared minimum for `colored` (2 -> 3), `indicatif` (0.17 -> 0.18),
+  `criterion` (0.5 -> 0.8), `png` (0.17 -> 0.18) and `md-5` (0.10 -> 0.11). The `indicatif`
+  bump is the one that matters: 0.17 pulled in `number_prefix`, which is unmaintained
+  (RUSTSEC-2025-0119), and 0.18 does not depend on it. `criterion` 0.8 deprecates its
+  `black_box` re-export in favour of `std::hint::black_box`, and `png` 0.18 requires a
+  seekable reader and returns the output buffer size as an `Option` -- both are test- and
+  benchmark-only call sites here.
+
+- Updated `self_update` to 1.3, whose default TLS backend is rustls rather than native-tls.
+  Two things fall out of that, and both shrink the CLI's dependency surface:
+  - The CLI no longer depends on `reqwest`. Its only use was setting one `Accept` header on
+    the release-asset download, which 1.x no longer supports; the download now goes to the
+    public release URL directly, which needs no header.
+  - The vendored OpenSSL build for musl targets is gone. It existed solely for the
+    `self_update` -> `reqwest` -> `native-tls` -> `openssl-sys` chain, and that chain no
+    longer exists.
+  `TempDir` and `self_replace` are no longer re-exported by `self_update`, so they are now
+  direct dependencies, as its own documentation directs. The 0.41 tree also carried an
+  optional `quick-xml` 0.23 with two open advisories against it; it was never compiled, but
+  it was in the lockfile and had to be exempted from the audit. It is gone, and so is the
+  exemption -- `cargo audit` is now clean with nothing ignored.
+
+- The declared minimum supported Rust version is now 1.88. It had said 1.87, which the crate
+  has not actually built on for some time — a dependency in the tree raised its own floor —
+  so anyone taking the manifest at its word got a compile error rather than a clear refusal.
+  CI now builds the workspace on exactly the declared version, so the two cannot drift apart
+  again.
+  The CLI crate, published alongside the library, now declares it as well — it named no
+  minimum at all, which reads as "any version" to anyone checking.
+
 ## 0.18.0 — 2026-09-06
 
 ### Added

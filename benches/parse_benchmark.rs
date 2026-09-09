@@ -4,7 +4,8 @@
 //!
 //! These benchmarks test parsing performance with synthetic PDF data.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
 
 /// Creates a minimal synthetic PDF with the given number of pages.
 fn create_test_pdf(page_count: usize) -> Vec<u8> {
