@@ -1144,10 +1144,8 @@ Complete document structure with metadata:
 | `ffi` | C-ABI foreign function interface | No |
 | `async` | Async I/O with Tokio | No |
 
-```toml
-# Cargo.toml - enable features
-[dependencies]
-unpdf = { version = "0.7", features = ["ffi", "async"] }
+```bash
+cargo add unpdf --features ffi,async
 ```
 
 ---
