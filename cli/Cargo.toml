@@ -9,7 +9,7 @@ repository = "https://github.com/iyulab/unpdf"
 readme = "../README.md"
 keywords = ["pdf", "markdown", "cli", "text-extraction"]
 categories = ["command-line-utilities"]
-rust-version = "1.88"
+rust-version = "1.89"
 
 [[bin]]
 name = "unpdf"

@@ -15,7 +15,7 @@ documentation = "https://docs.rs/unpdf"
 readme = "README.md"
 keywords = ["pdf", "markdown", "text-extraction", "document", "parser"]
 categories = ["parser-implementations", "text-processing"]
-rust-version = "1.88"
+rust-version = "1.89"
 
 [lib]
 name = "unpdf"
@@ -54,8 +54,8 @@ crc32fast = "1.5"  # PNG chunk CRCs when re-encoding FlateDecode images
 # PDF decryption
 rc4 = "0.2"
 md-5 = "0.11"
-aes = "0.8"
-cbc = "0.1"
+aes = "0.9"
+cbc = "0.2"
 
 # Text processing
 regex = "1.11"

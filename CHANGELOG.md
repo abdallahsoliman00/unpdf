@@ -4,6 +4,18 @@
 
 ### Changed
 
+- The declared minimum supported Rust version is now 1.89. It had said 1.87, which the crate
+  has not actually built on for some time — a dependency in the tree raised its own floor —
+  so anyone taking the manifest at its word got a compile error rather than a clear refusal.
+  1.89 is what `aes` 0.9 requires, and the manifest now says so. CI builds the workspace on
+  exactly the declared version, so the two cannot drift apart again.
+  The CLI crate, published alongside the library, now declares it as well — it named no
+  minimum at all, which reads as "any version" to anyone checking.
+
+- Updated `aes` (0.8 -> 0.9) and `cbc` (0.1 -> 0.2), moving the AES-128-CBC path onto
+  `cipher` 0.5. The `rc4` path was already there, so the two halves of the decryption
+  code now share one generation of the trait surface rather than pulling in both.
+
 - Refreshed the declared minimum for `colored` (2 -> 3), `indicatif` (0.17 -> 0.18),
   `criterion` (0.5 -> 0.8), `png` (0.17 -> 0.18) and `md-5` (0.10 -> 0.11). The `indicatif`
   bump is the one that matters: 0.17 pulled in `number_prefix`, which is unmaintained
@@ -26,13 +38,20 @@
   it was in the lockfile and had to be exempted from the audit. It is gone, and so is the
   exemption -- `cargo audit` is now clean with nothing ignored.
 
-- The declared minimum supported Rust version is now 1.88. It had said 1.87, which the crate
-  has not actually built on for some time — a dependency in the tree raised its own floor —
-  so anyone taking the manifest at its word got a compile error rather than a clear refusal.
-  CI now builds the workspace on exactly the declared version, so the two cannot drift apart
-  again.
-  The CLI crate, published alongside the library, now declares it as well — it named no
-  minimum at all, which reads as "any version" to anyone checking.
+
+### Fixed
+
+- A document whose encryption key is shorter than the cipher accepts is now reported as
+  undecryptable instead of aborting the process. Object keys are truncated to
+  `min(file key length + 5, 16)` bytes, so a file key under 11 bytes yields a key AES-128
+  cannot take, and the previous conversion panicked on that rather than returning.
+
+### Added
+
+- Known-answer tests for the AES-128-CBC path, covering the NIST SP 800-38A vector, a
+  PKCS7-padded payload, a payload that is not a whole number of blocks, an IV with no
+  ciphertext after it, and the short-key case above. The path had no direct coverage
+  before, so a green suite said nothing about whether it still decrypted correctly.
 
 ## 0.18.0 — 2026-09-06
 

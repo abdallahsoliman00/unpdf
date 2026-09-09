@@ -148,7 +148,7 @@ pub fn decrypt_rc4(key: &[u8], data: &[u8]) -> Vec<u8> {
 /// The first 16 bytes of `data` are the IV; the remainder is ciphertext.
 pub fn decrypt_aes128(key: &[u8], data: &[u8]) -> Option<Vec<u8>> {
     use aes::Aes128;
-    use cbc::cipher::{block_padding, BlockDecryptMut, KeyIvInit};
+    use cbc::cipher::{block_padding, BlockModeDecrypt, KeyIvInit};
 
     if data.len() < 16 || !data.len().is_multiple_of(16) {
         return None;
@@ -163,19 +163,113 @@ pub fn decrypt_aes128(key: &[u8], data: &[u8]) -> Option<Vec<u8>> {
 
     type Aes128CbcDec = cbc::Decryptor<Aes128>;
 
+    // `object_key` truncates to `min(file_key.len() + 5, 16)`, so a document whose file key is
+    // shorter than 11 bytes yields a key this cipher cannot take. Building the decryptor from
+    // slices reports that as a length error, which this function already has a way to express;
+    // converting the slice directly would panic on it instead, on a path fed by untrusted input.
+    let decrypt_with = |padded: &mut Vec<u8>, pkcs7: bool| -> Option<Vec<u8>> {
+        let decryptor = Aes128CbcDec::new_from_slices(key, iv).ok()?;
+        let plaintext = if pkcs7 {
+            decryptor.decrypt_padded::<block_padding::Pkcs7>(padded)
+        } else {
+            decryptor.decrypt_padded::<block_padding::NoPadding>(padded)
+        };
+        plaintext.ok().map(<[u8]>::to_vec)
+    };
+
     // Try PKCS7 first
     let mut buf = ciphertext.to_vec();
-    let decryptor = Aes128CbcDec::new(key.into(), iv.into());
-    if let Ok(plaintext) = decryptor.decrypt_padded_mut::<block_padding::Pkcs7>(&mut buf) {
-        return Some(plaintext.to_vec());
+    if let Some(plaintext) = decrypt_with(&mut buf, true) {
+        return Some(plaintext);
     }
 
     // Fallback: no padding (some PDFs omit PKCS7)
     let mut buf2 = ciphertext.to_vec();
-    let decryptor2 = Aes128CbcDec::new(key.into(), iv.into());
-    if let Ok(plaintext) = decryptor2.decrypt_padded_mut::<block_padding::NoPadding>(&mut buf2) {
-        return Some(plaintext.to_vec());
+    decrypt_with(&mut buf2, false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex digit pair"))
+            .collect()
     }
 
-    None
+    /// NIST SP 800-38A, F.2.2 (CBC-AES128.Decrypt), first two blocks.
+    ///
+    /// A known answer rather than a round-trip: encrypting and decrypting with the same crate
+    /// agrees with itself even when both halves are wrong, which is exactly what a dependency
+    /// upgrade could break without anything noticing.
+    #[test]
+    fn aes_128_cbc_matches_the_nist_known_answer() {
+        let key = hex("2b7e151628aed2a6abf7158809cf4f3c");
+        let iv = hex("000102030405060708090a0b0c0d0e0f");
+        let ciphertext = hex("7649abac8119b246cee98e9b12e9197d\
+             5086cb9b507219ee95db113a917678b2");
+        let expected = hex("6bc1bee22e409f96e93d7e117393172a\
+             ae2d8a571e03ac9c9eb76fac45af8e51");
+
+        // The function takes the IV prepended to the ciphertext, as PDF stores it.
+        let mut data = iv;
+        data.extend_from_slice(&ciphertext);
+
+        // These blocks carry no PKCS7 padding, so the no-padding fallback is what answers.
+        assert_eq!(decrypt_aes128(&key, &data), Some(expected));
+    }
+
+    #[test]
+    fn a_pkcs7_padded_payload_comes_back_without_its_padding() {
+        // Same key/IV; ciphertext produced from "unparser" padded to one block under PKCS7.
+        let key = hex("2b7e151628aed2a6abf7158809cf4f3c");
+        let iv = hex("000102030405060708090a0b0c0d0e0f");
+
+        use aes::Aes128;
+        use cbc::cipher::{block_padding::Pkcs7, BlockModeEncrypt, KeyIvInit};
+        let plaintext = b"unparser";
+        let mut buf = [0u8; 16];
+        buf[..plaintext.len()].copy_from_slice(plaintext);
+        let ct = cbc::Encryptor::<Aes128>::new_from_slices(&key, &iv)
+            .expect("16-byte key and iv")
+            .encrypt_padded::<Pkcs7>(&mut buf, plaintext.len())
+            .expect("one block of room")
+            .to_vec();
+
+        let mut data = iv;
+        data.extend_from_slice(&ct);
+
+        assert_eq!(decrypt_aes128(&key, &data).as_deref(), Some(&plaintext[..]));
+    }
+
+    /// `object_key` truncates to `min(file_key.len() + 5, 16)`, so a document whose file key is
+    /// shorter than 11 bytes produces a key AES-128 cannot take. Before the cipher 0.5 migration
+    /// this reached a slice-to-array conversion that panics on a length mismatch -- on a path
+    /// whose input is an untrusted file.
+    #[test]
+    fn a_key_the_cipher_cannot_take_is_refused_rather_than_panicking() {
+        let short_key = object_key(&[0xAB; 4], 1, 0, true);
+        assert!(
+            short_key.len() < 16,
+            "the truncation rule should yield 9 bytes here"
+        );
+
+        let data = vec![0u8; 32]; // a well-formed IV + one ciphertext block
+        assert_eq!(decrypt_aes128(&short_key, &data), None);
+    }
+
+    #[test]
+    fn a_payload_that_is_not_a_whole_number_of_blocks_is_refused() {
+        let key = hex("2b7e151628aed2a6abf7158809cf4f3c");
+        assert_eq!(decrypt_aes128(&key, &[0u8; 20]), None);
+        assert_eq!(decrypt_aes128(&key, &[0u8; 8]), None);
+    }
+
+    #[test]
+    fn an_iv_with_no_ciphertext_after_it_decrypts_to_nothing() {
+        let key = hex("2b7e151628aed2a6abf7158809cf4f3c");
+        assert_eq!(decrypt_aes128(&key, &[0u8; 16]), Some(vec![]));
+    }
 }
