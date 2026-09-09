@@ -83,8 +83,11 @@ fn decode_utf16be(bytes: &[u8]) -> Option<String> {
         return None;
     }
     let units: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|c| u16::from_be_bytes([c[0], c[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .copied()
+        .map(u16::from_be_bytes)
         .collect();
     String::from_utf16(&units).ok().filter(|s| !s.is_empty())
 }
