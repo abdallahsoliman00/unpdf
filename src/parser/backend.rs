@@ -368,8 +368,11 @@ impl PdfBackend for RawBackend {
             .get_dict(page_id)
             .map_err(|e| Error::PdfParse(e.to_string()))?;
 
-        let contents = raw_dict_get(page_dict, b"Contents")
-            .ok_or_else(|| Error::PdfParse("No Contents in page".to_string()))?;
+        // `/Contents` is optional: a page without it is empty by definition, not damaged,
+        // so there is nothing to fail and nothing lost to count.
+        let Some(contents) = raw_dict_get(page_dict, b"Contents") else {
+            return Ok(PageContent::complete(Vec::new()));
+        };
 
         let contents = self.doc.resolve(contents);
 
@@ -1870,6 +1873,28 @@ mod raw_backend_tests {
     fn page_content_fails_when_no_stream_could_be_decoded() {
         let raw = undecodable_backend();
         assert!(raw.page_content(raw.pages()[&1]).is_err());
+    }
+
+    /// `/Contents` is optional -- its absence is an empty page, and nothing was lost.
+    #[test]
+    fn a_page_without_contents_is_empty_rather_than_an_error() {
+        use crate::parser::test_pdf::pdf;
+        let raw = RawBackend::load_bytes(&pdf(
+            vec![
+                b"<</Type/Catalog/Pages 2 0 R>>".to_vec(),
+                b"<</Type/Pages/Kids[3 0 R]/Count 1>>".to_vec(),
+                b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]>>".to_vec(),
+            ],
+            1,
+        ))
+        .expect("the document structure is intact");
+        let page = raw.pages()[&1];
+
+        assert_eq!(
+            raw.page_content_with_losses(page).unwrap(),
+            PageContent::complete(Vec::new())
+        );
+        assert_eq!(raw.page_content(page).unwrap(), Vec::<u8>::new());
     }
 
     #[test]

@@ -9,6 +9,10 @@
   of the page reported as complete — while a page whose only content stream could not be
   decoded already failed under strict. Lenient parsing (the default) still keeps what the
   other streams hold.
+- `ErrorMode::Strict` no longer fails a page that has no `/Contents` entry. The entry is
+  optional — such a page (form fields or annotations only, for instance) is empty, not
+  damaged — but it was reported as a parse error, and lenient parsing logged it as a
+  failed page.
 
 ### Added
 
