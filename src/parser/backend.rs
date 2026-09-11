@@ -1730,92 +1730,48 @@ mod text_string_decoding_tests {
 #[cfg(test)]
 mod raw_backend_tests {
     use super::*;
-    use std::path::Path;
+    // Assembled in the test rather than read from disk -- see that module's docs.
+    use crate::parser::test_pdf::{one_page_pdf, ONE_PAGE_CONTENT};
 
-    /// Skip the test if the PDF fixture (gitignored under `test-files/`)
-    /// is unavailable, e.g., on CI. Returns the loaded backend or `None`.
-    fn try_load(rel: &str) -> Option<RawBackend> {
-        if !Path::new(rel).exists() {
-            eprintln!("skipping: fixture not present at {}", rel);
-            return None;
-        }
-        RawBackend::load_file(rel).ok()
+    fn backend() -> RawBackend {
+        RawBackend::load_bytes(&one_page_pdf()).expect("a well-formed PDF loads")
     }
 
     #[test]
-    fn test_raw_backend_pages() {
-        let Some(raw) = try_load("test-files/basic/trivial.pdf") else {
-            return;
-        };
-        let pages = raw.pages();
-        assert!(!pages.is_empty());
+    fn pages_are_enumerated_from_one() {
+        let pages = backend().pages();
+        assert_eq!(pages.len(), 1);
+        assert!(pages.contains_key(&1));
     }
 
     #[test]
-    fn test_raw_backend_page_content() {
-        let Some(raw) = try_load("test-files/basic/trivial.pdf") else {
-            return;
-        };
-        let pages = raw.pages();
-        let first_page = *pages.values().next().unwrap();
-        let content = raw.page_content(first_page).unwrap();
-        assert!(!content.is_empty());
+    fn a_page_content_stream_is_returned_as_written() {
+        let raw = backend();
+        let content = raw.page_content(raw.pages()[&1]).unwrap();
+        assert_eq!(content.trim_ascii_end(), ONE_PAGE_CONTENT);
     }
 
     #[test]
-    fn test_raw_backend_decode_content() {
-        let Some(raw) = try_load("test-files/basic/trivial.pdf") else {
-            return;
-        };
-        let pages = raw.pages();
-        let first_page = *pages.values().next().unwrap();
-        let content = raw.page_content(first_page).unwrap();
-        let ops = raw.decode_content(&content).unwrap();
-        assert!(!ops.is_empty());
+    fn a_content_stream_decodes_into_its_operators_in_order() {
+        let raw = backend();
+        let content = raw.page_content(raw.pages()[&1]).unwrap();
+        let operators: Vec<String> = raw
+            .decode_content(&content)
+            .unwrap()
+            .into_iter()
+            .map(|op| op.operator)
+            .collect();
+        assert_eq!(operators, ["BT", "Tf", "Td", "Tj", "ET"]);
     }
 
     #[test]
-    fn test_raw_backend_metadata() {
-        let Some(raw) = try_load("test-files/basic/trivial.pdf") else {
-            return;
-        };
-        let meta = raw.metadata();
-        assert!(!meta.version.is_empty());
+    fn metadata_reports_the_header_version() {
+        assert_eq!(backend().metadata().version, "1.4");
     }
 
     #[test]
-    fn test_raw_backend_page_dimensions() {
-        let Some(raw) = try_load("test-files/basic/trivial.pdf") else {
-            return;
-        };
-        let pages = raw.pages();
-        let first_page = *pages.values().next().unwrap();
-        let (w, h) = raw.page_dimensions(first_page);
-        assert!(w > 0.0 && h > 0.0);
-    }
-
-    #[test]
-    fn test_raw_backend_korean_pages() {
-        let Some(raw) = try_load("test-files/cjk/korean-test.pdf") else {
-            return;
-        };
-        assert!(!raw.pages().is_empty());
-    }
-
-    #[test]
-    fn test_iphone_korean_text_decode() {
-        let Some(raw) = try_load("test-files/realworld/iphone-info.pdf") else {
-            return;
-        };
-        let pages = raw.pages();
-        let first_page = *pages.values().next().unwrap();
-        let decoded = raw
-            .decode_text(first_page, b"T1_1", &[31, 30, 29, 28, 27])
-            .text;
-        assert!(
-            decoded.contains('사') && decoded.contains('서'),
-            "Korean text should be decoded: got {:?}",
-            decoded
-        );
+    fn page_dimensions_come_from_the_media_box() {
+        let raw = backend();
+        assert_eq!(raw.page_dimensions(raw.pages()[&1]), (595.0, 842.0));
     }
 }

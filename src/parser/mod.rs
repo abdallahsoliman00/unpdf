@@ -17,6 +17,8 @@ pub mod raw;
 pub(crate) mod sanitize;
 pub mod stream;
 mod table_detector;
+#[cfg(test)]
+pub(crate) mod test_pdf;
 mod vector_graphics;
 pub mod xycut;
 

@@ -528,48 +528,8 @@ fn parse_int(data: &[u8], pos: usize) -> Result<(i64, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Build a PDF here rather than reading one from disk.
-    ///
-    /// These tests used to load `test-files/basic/*.pdf` through a helper that returned `None`
-    /// when the file was missing, and every caller then returned early -- so with `test-files/`
-    /// gitignored and never present, all six reported green without executing a single
-    /// assertion. A fixture the test assembles cannot go missing, and it also says in the test
-    /// exactly which bytes the behaviour depends on.
-    fn pdf(objects: Vec<Vec<u8>>, root: usize) -> Vec<u8> {
-        let mut out = b"%PDF-1.4\n".to_vec();
-        let mut offsets = Vec::with_capacity(objects.len());
-        for (idx, body) in objects.iter().enumerate() {
-            offsets.push(out.len());
-            out.extend_from_slice(format!("{} 0 obj\n", idx + 1).as_bytes());
-            out.extend_from_slice(body);
-            out.extend_from_slice(b"\nendobj\n");
-        }
-        let xref_start = out.len();
-        let size = objects.len() + 1;
-        out.extend_from_slice(format!("xref\n0 {size}\n0000000000 65535 f \n").as_bytes());
-        for offset in &offsets {
-            out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
-        }
-        out.extend_from_slice(
-            format!("trailer\n<</Size {size}/Root {root} 0 R>>\nstartxref\n{xref_start}\n%%EOF\n")
-                .as_bytes(),
-        );
-        out
-    }
-
-    /// Catalog, page tree, one page, one content stream.
-    fn one_page_pdf() -> Vec<u8> {
-        pdf(
-            vec![
-                b"<</Type/Catalog/Pages 2 0 R>>".to_vec(),
-                b"<</Type/Pages/Kids[3 0 R]/Count 1>>".to_vec(),
-                b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Contents 4 0 R>>".to_vec(),
-                b"<</Length 38>>\nstream\nBT /F1 12 Tf 72 720 Td (Hi) Tj ET\n\nendstream".to_vec(),
-            ],
-            1,
-        )
-    }
+    // Assembled in the test rather than read from disk -- see that module's docs.
+    use crate::parser::test_pdf::{one_page_pdf, pdf};
 
     #[test]
     fn a_minimal_document_reports_its_version_and_page_count() {
@@ -668,6 +628,41 @@ mod tests {
             err.kind(),
             crate::error::ErrorKind::UnsupportedVersion,
             "got {err:?} -- a caller cannot branch on this if it arrives as the catch-all"
+        );
+    }
+
+    #[test]
+    fn a_document_that_needs_a_password_is_refused_as_encrypted() {
+        // RC4, revision 3. /U is what the empty user password would have to reproduce, and
+        // zeros are not that -- so opening without a password must fail, and must say why:
+        // "needs a password" is the one failure here a caller can act on.
+        let zeros = "00".repeat(32);
+        let bytes = pdf(
+            vec![
+                b"<</Type/Catalog/Pages 2 0 R>>".to_vec(),
+                b"<</Type/Pages/Kids[3 0 R]/Count 1>>".to_vec(),
+                b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]>>".to_vec(),
+                format!("<</Filter/Standard/V 2/R 3/Length 128/P -4/O<{zeros}>/U<{zeros}>>>")
+                    .into_bytes(),
+            ],
+            1,
+        );
+        let id = "00".repeat(16);
+        let encrypted = String::from_utf8(bytes)
+            .unwrap()
+            .replace(
+                "/Root 1 0 R>>",
+                &format!("/Root 1 0 R/Encrypt 4 0 R/ID[<{id}><{id}>]>>"),
+            )
+            .into_bytes();
+
+        let Err(err) = RawDocument::load(&encrypted) else {
+            panic!("the empty password does not authenticate, so loading must not succeed");
+        };
+        assert_eq!(
+            err.kind(),
+            crate::error::ErrorKind::Encrypted,
+            "got {err:?} -- a password-protected file must not look like a damaged one"
         );
     }
 

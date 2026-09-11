@@ -706,6 +706,8 @@ fn parse_pdf_date(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Assembled in the test rather than read from disk -- see that module's docs.
+    use crate::parser::test_pdf::{pdf, stream};
     use chrono::Datelike;
 
     #[test]
@@ -779,14 +781,6 @@ mod tests {
             .map(|i| format!("{} 0 R", first_page_obj + i * 2))
             .collect();
 
-        let stream = |dict: &str, data: &[u8]| -> Vec<u8> {
-            let mut o = dict.as_bytes().to_vec();
-            o.extend_from_slice(b"\nstream\n");
-            o.extend_from_slice(data);
-            o.extend_from_slice(b"\nendstream");
-            o
-        };
-
         let mut objects: Vec<Vec<u8>> = vec![
             b"<</Type/Catalog/Pages 2 0 R>>".to_vec(),
             format!("<</Type/Pages/Kids[{}]/Count {}>>", kids.join(" "), pages).into_bytes(),
@@ -818,25 +812,7 @@ mod tests {
         }
         objects.push(b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>".to_vec());
 
-        let mut pdf = b"%PDF-1.4\n".to_vec();
-        let mut offsets = Vec::with_capacity(objects.len());
-        for (idx, body) in objects.iter().enumerate() {
-            offsets.push(pdf.len());
-            pdf.extend_from_slice(format!("{} 0 obj\n", idx + 1).as_bytes());
-            pdf.extend_from_slice(body);
-            pdf.extend_from_slice(b"\nendobj\n");
-        }
-        let xref_start = pdf.len();
-        let size = objects.len() + 1;
-        pdf.extend_from_slice(format!("xref\n0 {size}\n0000000000 65535 f \n").as_bytes());
-        for offset in &offsets {
-            pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
-        }
-        pdf.extend_from_slice(
-            format!("trailer\n<</Size {size}/Root 1 0 R>>\nstartxref\n{xref_start}\n%%EOF\n")
-                .as_bytes(),
-        );
-        pdf
+        pdf(objects, 1)
     }
 
     #[test]
@@ -980,13 +956,6 @@ mod tests {
     }
     /// Two pages, each drawing a *different* image -- the control for the deduplication pass.
     fn two_distinct_images_pdf() -> Vec<u8> {
-        let stream = |dict: &str, data: &[u8]| -> Vec<u8> {
-            let mut o = dict.as_bytes().to_vec();
-            o.extend_from_slice(b"\nstream\n");
-            o.extend_from_slice(data);
-            o.extend_from_slice(b"\nendstream");
-            o
-        };
         let jpeg = |tail: u8| -> Vec<u8> {
             stream(
                 "<</Type/XObject/Subtype/Image/Width 100/Height 100/ColorSpace/DeviceGray/BitsPerComponent 8/Filter/DCTDecode/Length 10>>",
@@ -1005,24 +974,6 @@ mod tests {
             stream("<</Length 34>>", b"q 100 0 0 40 20 780 cm /Pic Do Q\n\n"),
         ];
 
-        let mut pdf = b"%PDF-1.4\n".to_vec();
-        let mut offsets = Vec::with_capacity(objects.len());
-        for (idx, body) in objects.iter().enumerate() {
-            offsets.push(pdf.len());
-            pdf.extend_from_slice(format!("{} 0 obj\n", idx + 1).as_bytes());
-            pdf.extend_from_slice(body);
-            pdf.extend_from_slice(b"\nendobj\n");
-        }
-        let xref_start = pdf.len();
-        let size = objects.len() + 1;
-        pdf.extend_from_slice(format!("xref\n0 {size}\n0000000000 65535 f \n").as_bytes());
-        for offset in &offsets {
-            pdf.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
-        }
-        pdf.extend_from_slice(
-            format!("trailer\n<</Size {size}/Root 1 0 R>>\nstartxref\n{xref_start}\n%%EOF\n")
-                .as_bytes(),
-        );
-        pdf
+        pdf(objects, 1)
     }
 }
