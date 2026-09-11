@@ -627,6 +627,7 @@ if q.pages_incomplete {
 | `unresolved_page_nodes` | Unreadable page-tree *nodes*. Non-zero means incomplete — **not** a count of lost pages. |
 | `skipped_object_count` | Objects that could not be loaded. Most cost no page (fonts, annotations), so this alone does not imply missing text. |
 | `suppressed_text_runs` | Text runs the font decoder could not read and discarded. Non-zero means text is missing from an otherwise successful extraction. |
+| `undecodable_content_streams` | Page content streams that could not be decoded. Lenient parsing leaves them out and keeps the rest of the page — an empty page when it was the page's only stream — so non-zero means content is missing. Strict parsing fails instead. |
 | `unsupported_image_count` | Embedded images recognized as image XObjects but not extractable (unsupported color space/bit depth), so dropped. Distinguishes "no image" from "image present but couldn't be extracted". |
 | `ai_fallback_count` | Times VLM image understanding fell back to the non-AI result (transport failure, non-success status, malformed response, or retries exhausted). Only ever non-zero when AI parse options are configured; extraction still succeeds, so treat it as a quality signal, not a failure. The render-side refine pass is not counted here. |
 

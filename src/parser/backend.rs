@@ -103,6 +103,14 @@ impl PageContent {
             undecodable_streams: 0,
         }
     }
+
+    /// A page's single content stream, which could not be decoded.
+    fn one_undecodable_stream() -> Self {
+        Self {
+            data: Vec::new(),
+            undecodable_streams: 1,
+        }
+    }
 }
 
 /// What a backend had to drop while reading the document structure.
@@ -202,6 +210,10 @@ pub trait PdfBackend: Send + Sync {
     fn page_fonts(&self, page: PageId) -> Result<Vec<BackendFontInfo>>;
 
     /// Return the raw (decompressed) content stream bytes for a page.
+    ///
+    /// Fails when none of the page's content streams can be decoded. A page split across
+    /// several streams may still lose some of them here without failing --
+    /// [`page_content_with_losses`](Self::page_content_with_losses) reports those.
     fn page_content(&self, page: PageId) -> Result<Vec<u8>>;
 
     /// Like [`page_content`](Self::page_content), but also reports content streams that
@@ -338,8 +350,16 @@ impl PdfBackend for RawBackend {
     }
 
     fn page_content(&self, page_id: PageId) -> Result<Vec<u8>> {
-        self.page_content_with_losses(page_id)
-            .map(|content| content.data)
+        // Without the loss count an empty result would read as an empty page, so losing
+        // every stream is an error on this path.
+        let content = self.page_content_with_losses(page_id)?;
+        if content.data.is_empty() && content.undecodable_streams > 0 {
+            return Err(Error::PdfParse(format!(
+                "none of the page's {} content stream(s) could be decoded",
+                content.undecodable_streams
+            )));
+        }
+        Ok(content.data)
     }
 
     fn page_content_with_losses(&self, page_id: PageId) -> Result<PageContent> {
@@ -353,6 +373,10 @@ impl PdfBackend for RawBackend {
 
         let contents = self.doc.resolve(contents);
 
+        // A page's only content stream failing to decode is the same loss as one part of a
+        // content array failing (below), so it is counted the same way rather than failing
+        // here. A strict caller fails the page on the count; a lenient one keeps the page and
+        // reports it -- which an error at this point would have left it unable to do.
         match contents {
             RawPdfObject::Reference(n, g) => {
                 let obj = self
@@ -361,13 +385,17 @@ impl PdfBackend for RawBackend {
                     .ok_or_else(|| Error::PdfParse("Content stream not found".to_string()))?;
                 let resolved = self.doc.resolve(obj);
                 if let Some(stream) = resolved.as_stream() {
-                    return raw_stream::decompress(stream).map(PageContent::complete);
+                    return Ok(raw_stream::decompress(stream).map_or_else(
+                        |_| PageContent::one_undecodable_stream(),
+                        PageContent::complete,
+                    ));
                 }
                 Err(Error::PdfParse("Invalid content stream".to_string()))
             }
-            RawPdfObject::Stream(stream) => {
-                raw_stream::decompress(stream).map(PageContent::complete)
-            }
+            RawPdfObject::Stream(stream) => Ok(raw_stream::decompress(stream).map_or_else(
+                |_| PageContent::one_undecodable_stream(),
+                PageContent::complete,
+            )),
             RawPdfObject::Array(arr) => {
                 let mut content = Vec::new();
                 let mut undecodable_streams = 0;
@@ -1810,6 +1838,38 @@ mod raw_backend_tests {
             .map(|op| op.operator)
             .collect();
         assert_eq!(operators, ["BT", "Tf", "Td", "Tj", "ET"]);
+    }
+
+    /// A page whose only content stream claims `/FlateDecode` over bytes no decoder accepts.
+    fn undecodable_backend() -> RawBackend {
+        use crate::parser::test_pdf::{pdf, stream};
+        let bytes = pdf(
+            vec![
+                b"<</Type/Catalog/Pages 2 0 R>>".to_vec(),
+                b"<</Type/Pages/Kids[3 0 R]/Count 1>>".to_vec(),
+                b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Contents 4 0 R>>".to_vec(),
+                // No zlib stream begins 0xFF 0xFF.
+                stream("<</Length 16/Filter/FlateDecode>>", &[0xFF; 16]),
+            ],
+            1,
+        );
+        RawBackend::load_bytes(&bytes).expect("the document structure is intact")
+    }
+
+    #[test]
+    fn an_undecodable_only_stream_is_counted_rather_than_an_error() {
+        let raw = undecodable_backend();
+        let content = raw.page_content_with_losses(raw.pages()[&1]).unwrap();
+        assert_eq!(content.data, Vec::<u8>::new());
+        assert_eq!(content.undecodable_streams, 1);
+    }
+
+    /// The plain accessor has no loss count to carry, so it must not turn "nothing could be
+    /// decoded" into an empty page.
+    #[test]
+    fn page_content_fails_when_no_stream_could_be_decoded() {
+        let raw = undecodable_backend();
+        assert!(raw.page_content(raw.pages()[&1]).is_err());
     }
 
     #[test]

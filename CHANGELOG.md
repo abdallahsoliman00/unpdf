@@ -15,6 +15,18 @@
 - `PdfBackend::page_content_with_losses`, returning the page's content together with the
   number of content streams that could not be decoded (`PageContent`). It has a default
   implementation, so existing backends are unaffected.
+- `ExtractionQuality::undecodable_content_streams` and `Page::undecodable_content_streams`:
+  page content streams that could not be decoded. Lenient parsing (the default) leaves such
+  a stream out and keeps the rest of the page — a page whose only content stream failed came
+  back empty — and nothing in the output said so. The count reaches the C ABI
+  (`unpdf_get_extraction_quality`, `unpdf_page_stats`), C# (`ExtractionQuality` /
+  `PageStats.UndecodableContentStreams`), Python, `warning_message()` and `unpdf info`.
+
+### Changed
+
+- The built-in backend's `page_content` now fails when none of a page's content streams can
+  be decoded. A page whose content array failed entirely used to return empty content, while
+  a page with a single failed stream already failed — both now behave the same.
 
 ## 0.19.0 — 2026-09-11
 

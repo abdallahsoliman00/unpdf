@@ -38,6 +38,15 @@ pub struct Page {
     /// lose a few runs and still carry most of its text.
     pub suppressed_text_runs: usize,
 
+    /// Content streams of this page that could not be decoded.
+    ///
+    /// Lenient parsing leaves them out and keeps whatever the page's other streams hold —
+    /// an empty page when the undecodable stream was its only one, which otherwise reads
+    /// exactly like a blank page. Non-zero means the page is missing content. Strict
+    /// parsing fails the page instead, so this is only ever non-zero under lenient.
+    #[serde(default)]
+    pub undecodable_content_streams: usize,
+
     /// 콘텐츠 스트림의 텍스트 쇼잉 오퍼레이터(`Tj`/`TJ`/`'`/`"`) 수.
     /// 0이면서 `image_op_count > 0` 이면 텍스트 레이어 없는 스캔 페이지,
     /// 둘 다 0이면 진짜 빈 페이지 — 소비자가 이 둘을 구분하는 판별자.
@@ -73,6 +82,7 @@ impl Page {
             images: Vec::new(),
             ocr_text_suppressed: false,
             suppressed_text_runs: 0,
+            undecodable_content_streams: 0,
             text_op_count: 0,
             image_op_count: 0,
             unsupported_image_count: 0,

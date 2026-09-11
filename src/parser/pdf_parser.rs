@@ -258,6 +258,7 @@ pub(crate) fn parse_single_page(
         // keeps what the other streams hold; strict fails the page, exactly as it does
         // when the page's only content stream cannot be decoded.
         let undecodable = analyzer.undecodable_content_streams();
+        page.undecodable_content_streams = undecodable;
         if undecodable > 0 {
             if options.error_mode == ErrorMode::Strict {
                 return Err(Error::PdfParse(format!(

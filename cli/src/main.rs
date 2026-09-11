@@ -997,6 +997,15 @@ fn cmd_info(input: &Path, quiet: bool) -> Result<bool, Box<dyn std::error::Error
             .yellow()
         );
     }
+    // Same reasoning again: a content stream that could not be decoded is content missing
+    // from the output, and a page whose only stream failed looks blank otherwise.
+    if q.undecodable_content_streams > 0 {
+        println!(
+            "{}: {}",
+            "Content streams".bold(),
+            format!("{} undecodable, left out", q.undecodable_content_streams).yellow()
+        );
+    }
     println!(
         "{}: {}",
         "Encrypted".bold(),
