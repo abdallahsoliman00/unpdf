@@ -44,6 +44,13 @@ pub(crate) fn apply(document: &mut Document, cfg: &AiConfig) {
         .collect();
 
     let mut work = || {
+        // Before the per-page pass, so no page's thread gets to caption a shared image with its
+        // own context first -- see `caption_repeated_images`.
+        let repeated = if image_scope == ImageScope::All {
+            caption_repeated_images(&document.pages, cfg, &shared, &fallback_count)
+        } else {
+            Captions::new()
+        };
         document.pages.par_iter_mut().for_each(|page| {
             // Eligibility is decided once, before either point mutates the page: a
             // page the OCR gate (or a plain text-less scan) left with nothing but a
@@ -56,7 +63,7 @@ pub(crate) fn apply(document: &mut Document, cfg: &AiConfig) {
                 // Point B: individual images left over on otherwise-text pages. Only
                 // when the caller asked for full coverage — `LowConfidencePagesOnly`
                 // stops at A.
-                process_point_b(page, cfg, &shared, &fallback_count);
+                process_point_b(page, cfg, &shared, &repeated, &fallback_count);
             }
         });
     };
@@ -113,6 +120,7 @@ fn process_point_b(
     page: &mut Page,
     cfg: &AiConfig,
     shared: &HashMap<String, (String, Vec<u8>)>,
+    repeated: &Captions,
     fallback_count: &AtomicUsize,
 ) {
     // Reverse order: a Structured result below can change the element count at
@@ -131,6 +139,16 @@ fn process_point_b(
             continue;
         };
         let resource_id = resource_id.clone();
+        // An image drawn more than once was captioned once, up front; a failure there was
+        // counted there -- once, not once per occurrence.
+        match repeated.get(&resource_id) {
+            Some(Some(understanding)) => {
+                apply_at(&mut page.elements, idx, understanding.clone());
+                continue;
+            }
+            Some(None) => continue,
+            None => {}
+        }
         // The page's own inventory first -- it is the common case and needs no allocation --
         // then the document-wide one, which is where a deduplicated image now lives.
         let Some((mime_type, data)) = page
@@ -150,18 +168,94 @@ fn process_point_b(
         };
 
         match understand_image(cfg, &data, &mime_type, context) {
-            Ok(ImageUnderstanding::Structured(blocks)) => {
-                page.elements.splice(idx..=idx, map_content_blocks(blocks));
-            }
-            Ok(ImageUnderstanding::Description(text)) => {
-                if let Block::Image { alt_text, .. } = &mut page.elements[idx] {
-                    *alt_text = Some(text);
-                }
-            }
+            Ok(
+                understanding @ (ImageUnderstanding::Structured(_)
+                | ImageUnderstanding::Description(_)),
+            ) => apply_at(&mut page.elements, idx, understanding),
             Ok(_) | Err(_) => {
                 fallback_count.fetch_add(1, Ordering::Relaxed);
             }
         }
+    }
+}
+
+/// VLM results for the images point B would otherwise caption more than once, by resource id.
+/// `None` is a call that fell back: every occurrence of that image stays uncaptioned.
+type Captions = HashMap<String, Option<ImageUnderstanding>>;
+
+/// Captions each image point B would meet more than once -- a single time, with no surrounding
+/// text.
+///
+/// Deduplication leaves one resource for an image a document draws on several pages (a
+/// running-header logo is the ordinary case), but point B still met it once per page and sent
+/// each page's neighbouring paragraphs along with it: the model was paid once per page for one
+/// picture, and the captions differed only because the pages did. No single page's text
+/// describes an image that belongs to all of them, so this call carries none, and its result is
+/// applied to every occurrence.
+///
+/// It runs before the per-page pass rather than as a cache inside it. In a parallel loop the
+/// first page to reach the image would send its own context, and which page that is depends on
+/// thread scheduling.
+fn caption_repeated_images(
+    pages: &[Page],
+    cfg: &AiConfig,
+    shared: &HashMap<String, (String, Vec<u8>)>,
+    fallback_count: &AtomicUsize,
+) -> Captions {
+    let mut occurrences: HashMap<&str, usize> = HashMap::new();
+    // A point A page is captioned whole by its own call and never reaches point B.
+    for page in pages.iter().filter(|page| !is_point_a_candidate(page)) {
+        for block in &page.elements {
+            if let Block::Image {
+                resource_id,
+                alt_text: None,
+                ..
+            } = block
+            {
+                *occurrences.entry(resource_id.as_str()).or_default() += 1;
+            }
+        }
+    }
+
+    occurrences
+        .into_iter()
+        .filter(|&(_, count)| count > 1)
+        .collect::<Vec<_>>()
+        .into_par_iter()
+        .filter_map(|(id, _)| {
+            // Bytes the document does not hold cannot be sent. Leaving the id out lets point B
+            // treat it exactly as it treats any other image it cannot resolve.
+            let (mime_type, data) = shared.get(id)?;
+            let result = match understand_image(cfg, data, mime_type, ImageContext::default()) {
+                Ok(
+                    understanding @ (ImageUnderstanding::Structured(_)
+                    | ImageUnderstanding::Description(_)),
+                ) => Some(understanding),
+                Ok(_) | Err(_) => {
+                    fallback_count.fetch_add(1, Ordering::Relaxed);
+                    None
+                }
+            };
+            Some((id.to_owned(), result))
+        })
+        .collect()
+}
+
+/// Puts a VLM result in place of (`Structured`) or onto (`Description`) the image block at
+/// `idx`.
+fn apply_at(elements: &mut Vec<Block>, idx: usize, understanding: ImageUnderstanding) {
+    match understanding {
+        ImageUnderstanding::Structured(blocks) => {
+            elements.splice(idx..=idx, map_content_blocks(blocks));
+        }
+        ImageUnderstanding::Description(text) => {
+            if let Block::Image { alt_text, .. } = &mut elements[idx] {
+                *alt_text = Some(text);
+            }
+        }
+        // Callers pass only the two variants above; one this crate does not know leaves the
+        // block as it was.
+        _ => {}
     }
 }
 

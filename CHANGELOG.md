@@ -64,6 +64,14 @@
   produced 40 of everything. Image references now point at the first occurrence in reading
   order, which is stable across runs; images whose bytes differ are untouched.
 
+- With AI extraction on, an image that appears more than once is now sent to the vision model
+  once, not once per occurrence. The running-header logo above still cost one model call per
+  page even after it became one resource. Each of those calls also carried that page's
+  surrounding paragraphs as context, so the logo's caption differed from page to page for no
+  reason tied to the logo. A repeated image is now captioned once, without any single page's
+  context, and every occurrence receives that caption. An image that appears only once is
+  still captioned with its surrounding text, as before. If that one call fails, it counts as
+  one fallback in `ai_fallback_count`, which counts calls, not occurrences.
 
 - A document whose encryption key is shorter than the cipher accepts is now reported as
   undecryptable instead of aborting the process. Object keys are truncated to

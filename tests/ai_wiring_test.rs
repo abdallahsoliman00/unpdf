@@ -309,4 +309,76 @@ fn a_shared_image_is_captioned_on_every_page_that_draws_it() {
             page.number
         );
     }
+
+    // One picture, one caption request -- not one per page that draws it.
+    assert_eq!(
+        server.received_bodies().len(),
+        1,
+        "a shared image must be sent to the model once, not once per page"
+    );
+}
+
+#[test]
+fn a_repeated_image_is_captioned_without_any_one_pages_context() {
+    // Each page surrounds the logo with different text. Captioning it once with page 1's
+    // text would hand page 3 a caption written for page 1; captioning it with no text at
+    // all gives every page the same caption, and a correct one for each of them.
+    let pages = 3;
+    let server = MockServer::serving(vec![(
+        200,
+        chat_response(&description_body("the company logo")),
+    )]);
+    let options = ParseOptions::new()
+        .with_resources(true)
+        .with_ai(config(server.url()));
+
+    parse_bytes_with_options(&repeated_logo_pdf(pages), options).unwrap();
+
+    let bodies = server.received_bodies();
+    assert_eq!(bodies.len(), 1, "one request for the one repeated image");
+    for marker in [
+        "Text immediately before the image",
+        "Text immediately after the image",
+        "Body text on page",
+    ] {
+        assert!(
+            !bodies[0].contains(marker),
+            "a repeated image's request must carry no page's context, found {marker:?} in {}",
+            bodies[0]
+        );
+    }
+}
+
+#[test]
+fn a_failed_caption_for_a_repeated_image_is_one_fallback() {
+    // `ai_fallback_count` counts AI calls that fell back. One call stands for every page
+    // the image appears on, so its failure is one fallback -- reporting three would claim
+    // three calls failed when only one was made.
+    let pages = 3;
+    let server = MockServer::serving(
+        (0..8)
+            .map(|_| (500, "{\"error\":\"boom\"}".to_string()))
+            .collect(),
+    );
+    let options = ParseOptions::new()
+        .with_resources(true)
+        .with_ai(config(server.url()));
+
+    let doc = parse_bytes_with_options(&repeated_logo_pdf(pages), options).unwrap();
+
+    assert_eq!(doc.extraction_quality.ai_fallback_count, 1);
+    for page in &doc.pages {
+        let Some(Block::Image { alt_text, .. }) = page
+            .elements
+            .iter()
+            .find(|b| matches!(b, Block::Image { .. }))
+        else {
+            panic!("page {} lost its image block", page.number);
+        };
+        assert!(
+            alt_text.is_none(),
+            "a failed call must leave every occurrence uncaptioned, page {}",
+            page.number
+        );
+    }
 }
