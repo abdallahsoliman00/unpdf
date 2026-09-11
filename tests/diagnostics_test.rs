@@ -1,5 +1,6 @@
-use std::path::Path;
-use unpdf::{parse_file, ExtractionQuality};
+mod common;
+
+use unpdf::{parse_bytes, ExtractionQuality};
 
 #[test]
 fn test_extraction_quality_from_text() {
@@ -31,67 +32,29 @@ fn test_extraction_quality_empty() {
     assert!(q.warning_message().is_some());
 }
 
+/// A page with a text layer reports that text in the quality metrics, cleanly.
 #[test]
-fn test_basic_pdf_has_quality_metrics() {
-    let path = Path::new("test-files/basic/trivial.pdf");
-    if !path.exists() {
-        return;
-    }
-    let doc = parse_file(path).unwrap();
-    assert!(doc.extraction_quality.char_count > 0);
-    assert!(doc.extraction_quality.word_count > 0);
+fn a_text_page_reports_its_words_and_no_replacement_characters() {
+    let q = parse_bytes(&common::text_pdf()).unwrap().extraction_quality;
+    assert_eq!(q.word_count, 2, "\"Hello World\" is two words");
+    assert_eq!(q.replacement_char_count, 0);
+    assert!(q.is_good(), "got {:?}", q.warning_message());
 }
 
+/// A document that is only an image has no text layer to extract. The report must say so,
+/// and say it in terms a reader can act on.
 #[test]
-fn test_encrypted_pdf_handling() {
-    let path = Path::new("test-files/encrypted/password-protected.pdf");
-    if !path.exists() {
-        return;
-    }
-    let result = parse_file(path);
-    // Should either succeed (if empty password works) or return a clear error
-    match result {
-        Ok(doc) => {
-            // Successfully decrypted with empty password
-            assert!(
-                doc.extraction_quality.char_count > 0 || doc.metadata.encrypted,
-                "Decrypted PDF should have content or report encrypted"
-            );
-        }
-        Err(e) => {
-            let msg = e.to_string();
-            assert!(
-                msg.contains("encrypted")
-                    || msg.contains("Encrypted")
-                    || msg.contains("password")
-                    || msg.contains("supported"),
-                "Error should be about encryption: {}",
-                msg
-            );
-        }
-    }
-}
-
-#[test]
-fn test_multicolumn_reading_order() {
-    let path = Path::new("test-files/complex/multicolumn.pdf");
-    if !path.exists() {
-        return;
-    }
-    let doc = parse_file(path).unwrap();
-    let text = doc.plain_text();
-    assert!(!text.is_empty(), "Should extract text from multicolumn PDF");
-}
-
-#[test]
-fn test_two_column_reading_order() {
-    let path = Path::new("test-files/complex/two-column.pdf");
-    if !path.exists() {
-        return;
-    }
-    let doc = parse_file(path).unwrap();
-    let text = doc.plain_text();
-    assert!(!text.is_empty(), "Should extract text from two-column PDF");
+fn an_image_only_document_is_reported_as_a_scan() {
+    let q = parse_bytes(&common::image_only_pdf())
+        .unwrap()
+        .extraction_quality;
+    assert!(q.is_scan_pdf);
+    assert_eq!(q.char_count, 0);
+    let warning = q.warning_message().expect("a scan must warn");
+    assert!(
+        warning.contains("scanned image"),
+        "the warning should name the cause, got {warning:?}"
+    );
 }
 
 #[test]
@@ -108,49 +71,4 @@ fn test_toc_dot_leader_removal() {
     );
     assert!(output.contains("Introduction"));
     assert!(output.contains("Normal paragraph text"));
-}
-
-#[test]
-fn test_image_pdf_has_content() {
-    let path = Path::new("test-files/images/sample-with-images.pdf");
-    if !path.exists() {
-        return;
-    }
-    let doc = parse_file(path).unwrap();
-    let text = doc.plain_text();
-    assert!(!text.is_empty(), "Should extract text from PDF with images");
-}
-
-#[test]
-fn test_page_number_pattern() {
-    // This tests the overall extraction, not the internal function
-    let path = Path::new("test-files/basic/trivial.pdf");
-    if !path.exists() {
-        return;
-    }
-    let doc = parse_file(path).unwrap();
-    let text = doc.plain_text();
-    // Basic PDFs should still extract content
-    assert!(!text.is_empty());
-}
-
-#[test]
-fn test_table_extraction_basic() {
-    let path = Path::new("test-files/tables/sample-tables.pdf");
-    if !path.exists() {
-        return;
-    }
-    let result = parse_file(path);
-    // Skip if file is encrypted or unreadable
-    if result.is_err() {
-        return;
-    }
-    let doc = result.unwrap();
-    // Should have some table blocks
-    let has_tables = doc.pages.iter().any(|p| {
-        p.elements
-            .iter()
-            .any(|b| matches!(b, unpdf::model::Block::Table(_)))
-    });
-    assert!(has_tables, "Table PDF should detect tables");
 }

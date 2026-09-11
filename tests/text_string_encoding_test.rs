@@ -12,11 +12,9 @@
 //! it as CJK, so the mixed-script unmarked case stays on the single-byte reading and is
 //! asserted as a limit rather than fixed.
 //!
-//! PDFs are assembled byte-by-byte rather than read from `test-files/` (gitignored, so
-//! fixture-based tests silently skip in CI). The real-corpus test at the bottom guards
-//! local runs, where the motivating documents are available.
+//! PDFs are assembled byte-by-byte rather than read from disk, so every test here runs
+//! from the repository alone.
 
-use std::path::Path;
 use unpdf::model::FieldValue;
 use unpdf::PdfParser;
 
@@ -190,38 +188,4 @@ fn utf16be_metadata_titles_are_decoded_with_and_without_the_mark() {
         title_of(&hex_utf16be("Report 2026", false)).as_deref(),
         Some("Report 2026")
     );
-}
-
-/// The motivating documents. Field names must be text: no NUL (the C ABI cannot carry
-/// one) and no U+FFFD (which is how the old reading reported anything non-ASCII).
-/// Skips when `test-files/` is absent, so this guards local runs rather than CI.
-#[test]
-fn real_form_corpus_field_names_are_text() {
-    let mut checked = 0usize;
-    for rel in [
-        "test-files/forms/pdf-form-sample.pdf",
-        "test-files/forms/pdflatex-form.pdf",
-    ] {
-        let path = Path::new(rel);
-        if !path.exists() {
-            continue;
-        }
-        let doc = unpdf::parse_file(path).unwrap_or_else(|e| panic!("{rel}: {e}"));
-        for field in &doc.form_fields {
-            assert!(
-                !field.name.contains('\0'),
-                "{rel}: field name carries NUL: {:?}",
-                field.name
-            );
-            assert!(
-                !field.name.contains('\u{FFFD}'),
-                "{rel}: field name degraded to U+FFFD: {:?}",
-                field.name
-            );
-        }
-        checked += 1;
-    }
-    if checked == 0 {
-        eprintln!("skipping: no form fixtures present under test-files/");
-    }
 }

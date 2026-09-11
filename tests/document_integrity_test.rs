@@ -4,6 +4,8 @@
 //! `test-files/` (gitignored, so fixture-based tests silently skip in CI). Everything
 //! these tests assert is therefore reproducible from the repository alone.
 
+mod common;
+
 use unpdf::parser::raw::RawDocument;
 use unpdf::PdfParser;
 
@@ -205,68 +207,35 @@ fn unreadable_catalog_reports_damage_rather_than_an_empty_document() {
     assert!(q.warning_message().is_some());
 }
 
-/// Every real PDF in `test-files/` must report itself intact.
+/// Every shared fixture must report itself intact.
 ///
 /// The damage signals are only worth having if they stay silent on healthy documents:
 /// a `/Count` that disagrees with the page tree, or a page-tree node shape the walk
-/// does not recognise, would turn every normal file into a false warning. Skips when
-/// `test-files/` is absent (it is gitignored), so this guards local runs, not CI.
+/// does not recognise, would turn every normal file into a false warning. The shared
+/// fixtures cover a dozen document shapes -- text, tables, columns, CJK, images, a form,
+/// several pages -- and, unlike a directory of local files, are present in every checkout.
 #[test]
-fn real_fixtures_report_no_damage() {
-    fn collect_pdfs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                collect_pdfs(&path, out);
-            } else if path.extension().is_some_and(|e| e == "pdf") {
-                out.push(path);
-            }
-        }
-    }
-
-    let root = std::path::Path::new("test-files");
-    if !root.exists() {
-        eprintln!("skipping: test-files/ not present");
-        return;
-    }
-
-    let mut pdfs = Vec::new();
-    collect_pdfs(root, &mut pdfs);
-    assert!(!pdfs.is_empty(), "test-files/ present but holds no PDFs");
-
-    let mut checked = 0usize;
-    for path in &pdfs {
-        let Ok(data) = std::fs::read(path) else {
-            continue;
-        };
-        // Documents that fail to load are a different matter — this test is about files
-        // that parse fine being wrongly accused of damage.
-        let Ok(doc) = RawDocument::load(&data) else {
-            continue;
-        };
+fn every_shared_fixture_reports_no_damage() {
+    for (name, data) in common::all_fixtures() {
+        let doc = RawDocument::load(&data).unwrap_or_else(|e| panic!("{name}: {e}"));
         let scan = doc.scan_page_tree();
-        let declared = doc.declared_page_count();
-        checked += 1;
-
         assert_eq!(
-            scan.unresolved_nodes,
-            0,
-            "{} is intact but reported {} unresolved page-tree node(s)",
-            path.display(),
-            scan.unresolved_nodes
+            scan.unresolved_nodes, 0,
+            "{name} is intact but reported unresolved page-tree node(s)"
         );
         assert_eq!(
-            declared,
+            doc.declared_page_count(),
             Some(scan.pages.len() as u32),
-            "{}: declared /Count and pages found disagree",
-            path.display()
+            "{name}: declared /Count and pages found disagree"
         );
+
+        let q = PdfParser::from_bytes(&data)
+            .unwrap()
+            .parse()
+            .unwrap()
+            .extraction_quality;
+        assert!(!q.pages_incomplete, "{name} must not claim page loss");
     }
-    assert!(checked > 0, "no fixture could be loaded");
-    eprintln!("checked {checked} of {} fixtures", pdfs.len());
 }
 
 #[test]

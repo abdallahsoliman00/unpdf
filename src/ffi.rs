@@ -1022,7 +1022,6 @@ unparser_shared::export_free_bytes!(
 mod tests {
     use super::*;
     use std::ffi::{CStr, CString};
-    use std::path::Path;
 
     #[test]
     fn test_version() {
@@ -1049,40 +1048,6 @@ mod tests {
 
         let error = unpdf_last_error();
         assert!(!error.is_null());
-    }
-
-    #[test]
-    fn test_parse_and_convert() {
-        let path = "test-files/sample.pdf";
-        if !Path::new(path).exists() {
-            return;
-        }
-
-        let path_cstr = CString::new(path).unwrap();
-        let doc = unsafe { unpdf_parse_file(path_cstr.as_ptr()) };
-        assert!(!doc.is_null());
-
-        // Test markdown conversion
-        let md = unsafe { unpdf_to_markdown(doc, 0) };
-        assert!(!md.is_null());
-        unsafe { unpdf_free_string(md) };
-
-        // Test text conversion
-        let text = unsafe { unpdf_to_text(doc) };
-        assert!(!text.is_null());
-        unsafe { unpdf_free_string(text) };
-
-        // Test JSON conversion
-        let json = unsafe { unpdf_to_json(doc, UNPDF_JSON_PRETTY) };
-        assert!(!json.is_null());
-        unsafe { unpdf_free_string(json) };
-
-        // Test section count
-        let count = unsafe { unpdf_section_count(doc) };
-        assert!(count >= 0);
-
-        // Free document
-        unsafe { unpdf_free_document(doc) };
     }
 
     #[test]

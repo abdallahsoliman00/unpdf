@@ -1,6 +1,6 @@
 //! Structural-fidelity benchmark (1st increment): a small domain fixture
 //! corpus scored against hand-authored expectations via
-//! `common::fidelity::score`. This is the regression floor for extraction
+//! `fidelity::score`. This is the regression floor for extraction
 //! *quality* (block-type classification, text recovery, table-cell
 //! accuracy) that unit tests don't cover — they assert one field at a time
 //! and don't notice a same-shape-different-content drift the way a
@@ -17,8 +17,11 @@
 //! license, `test-files/` gitignored) are not.
 
 mod common;
+// This binary's own module rather than part of `common`: `common` is compiled into
+// every test binary that includes it, and the metric's unit tests ran once per binary.
+mod fidelity;
 
-use common::fidelity::{score, ExpectedBlock, FidelityScore};
+use fidelity::{score, ExpectedBlock, FidelityScore};
 use unpdf::PdfParser;
 
 fn parse(bytes: &[u8]) -> unpdf::model::Document {

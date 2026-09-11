@@ -1,7 +1,6 @@
-use std::path::Path;
+mod common;
+
 use unpdf::model::{FieldType, FieldValue, FormField};
-use unpdf::parse_file;
-use unpdf::to_markdown;
 
 #[test]
 fn test_form_field_text() {
@@ -58,55 +57,25 @@ fn test_form_field_no_value_no_default() {
     assert_eq!(field.display_value(), "");
 }
 
+/// A document with no AcroForm has no form fields -- not an empty placeholder entry.
 #[test]
-fn test_form_pdf_extracts_fields() {
-    let path = Path::new("test-files/forms/pdf-form-sample.pdf");
-    if !path.exists() {
-        return;
-    }
-    let doc = parse_file(path).unwrap();
-    assert!(
-        !doc.form_fields.is_empty(),
-        "Should extract form fields from PDF with AcroForm"
-    );
+fn a_document_without_a_form_has_no_form_fields() {
+    let doc = unpdf::parse_bytes(&common::text_pdf()).unwrap();
+    assert!(doc.form_fields.is_empty(), "got {:?}", doc.form_fields);
 }
 
+/// Form fields are rendered as a section of their own after the page content, carrying each
+/// field's name and value.
 #[test]
-fn test_pdflatex_form_fields() {
-    let path = Path::new("test-files/forms/pdflatex-form.pdf");
-    if !path.exists() {
-        return;
-    }
-    let doc = parse_file(path).unwrap();
+fn form_fields_are_rendered_as_their_own_markdown_section() {
+    let doc = unpdf::parse_bytes(&common::form_pdf()).unwrap();
+    let md = unpdf::render::to_markdown(&doc, &unpdf::RenderOptions::default()).unwrap();
+    let section = md
+        .split("## Form Fields")
+        .nth(1)
+        .unwrap_or_else(|| panic!("a document with fields gets the section, got {md:?}"));
     assert!(
-        !doc.form_fields.is_empty(),
-        "Should extract form fields from LaTeX-generated PDF"
-    );
-}
-
-#[test]
-fn test_non_form_pdf_has_no_fields() {
-    let path = Path::new("test-files/basic/trivial.pdf");
-    if !path.exists() {
-        return;
-    }
-    let doc = parse_file(path).unwrap();
-    assert!(
-        doc.form_fields.is_empty(),
-        "Non-form PDF should have no form fields"
-    );
-}
-
-#[test]
-fn test_form_fields_in_markdown() {
-    let path = Path::new("test-files/forms/pdf-form-sample.pdf");
-    if !path.exists() {
-        return;
-    }
-    let md = to_markdown(path).unwrap();
-    // Form fields section should be present
-    assert!(
-        md.contains("Form Fields"),
-        "Markdown should contain Form Fields section"
+        section.contains("FirstName") && section.contains("John"),
+        "the section should carry the field's name and value, got {section:?}"
     );
 }

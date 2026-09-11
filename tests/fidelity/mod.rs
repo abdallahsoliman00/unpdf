@@ -21,9 +21,11 @@ pub enum ExpectedBlock {
     Table { rows: Vec<Vec<&'static str>> },
 }
 
+/// What the block-type alignment compares. A heading's level is part of its kind: an expected
+/// H1 extracted as an H3 is a structural miss, not a match with the right text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
-    Heading,
+    Heading(u8),
     Paragraph,
     Table,
     Other,
@@ -31,8 +33,10 @@ enum Kind {
 
 fn actual_kind(b: &Block) -> Kind {
     match b {
-        Block::Paragraph(p) if p.is_heading() => Kind::Heading,
-        Block::Paragraph(_) => Kind::Paragraph,
+        Block::Paragraph(p) => match p.heading_level() {
+            Some(level) => Kind::Heading(level),
+            None => Kind::Paragraph,
+        },
         Block::Table(_) => Kind::Table,
         _ => Kind::Other,
     }
@@ -40,7 +44,7 @@ fn actual_kind(b: &Block) -> Kind {
 
 fn expected_kind(e: &ExpectedBlock) -> Kind {
     match e {
-        ExpectedBlock::Heading { .. } => Kind::Heading,
+        ExpectedBlock::Heading { level, .. } => Kind::Heading(*level),
         ExpectedBlock::Paragraph { .. } => Kind::Paragraph,
         ExpectedBlock::Table { .. } => Kind::Table,
     }

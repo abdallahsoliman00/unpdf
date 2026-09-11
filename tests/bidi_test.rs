@@ -30,15 +30,3 @@ fn test_reorder_bidi_arabic() {
     let result = bidi::reorder_bidi("مرحبا");
     assert!(!result.is_empty());
 }
-
-#[test]
-fn test_arabic_pdf_extraction() {
-    use std::path::Path;
-    let path = Path::new("test-files/cjk/arabic.pdf");
-    if !path.exists() {
-        return;
-    }
-    let doc = unpdf::parse_file(path).unwrap();
-    let text = doc.plain_text();
-    assert!(!text.is_empty(), "Should extract text from Arabic PDF");
-}

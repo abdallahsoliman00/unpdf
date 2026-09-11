@@ -13,6 +13,8 @@
 //! PDFs are assembled byte-by-byte here rather than read from `test-files/`
 //! (gitignored, so fixture-based tests silently skip in CI).
 
+mod common;
+
 use unpdf::render::{to_json, to_markdown, JsonFormat, RenderOptions};
 use unpdf::PdfParser;
 
@@ -188,54 +190,26 @@ fn ordinary_text_is_untouched() {
     assert!(doc.plain_text().contains("Hello World"));
 }
 
-/// No real document should contain control characters, so the invariant must hold
-/// across the whole corpus with nothing removed. Skips when `test-files/` is absent
-/// (it is gitignored), so this guards local runs rather than CI.
+/// No well-formed document should yield control characters, so the invariant must hold
+/// on every shared fixture with nothing removed. This used to sweep a local directory of
+/// real PDFs that no checkout contains; the shared fixtures are always present.
 #[test]
-fn real_corpus_extracts_clean_text() {
-    let root = std::path::Path::new("test-files");
-    if !root.exists() {
-        eprintln!("skipping: test-files/ not present");
-        return;
-    }
-
-    let mut checked = 0;
-    let mut stack = vec![root.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-                continue;
-            }
-            if path.extension().and_then(|e| e.to_str()) != Some("pdf") {
-                continue;
-            }
-            let Ok(doc) = PdfParser::open(&path).and_then(|p| p.parse()) else {
-                continue;
-            };
-
-            for (surface, text) in [
-                ("markdown", markdown(&doc)),
-                ("plain text", doc.plain_text()),
-            ] {
-                let found = non_text_controls(&text);
-                assert!(
-                    found.is_empty(),
-                    "{} of {} carries {} control character(s): {:?}",
-                    surface,
-                    path.display(),
-                    found.len(),
-                    &found[..found.len().min(8)]
-                );
-            }
-            checked += 1;
+fn every_shared_fixture_extracts_clean_text() {
+    for (name, data) in common::all_fixtures() {
+        let doc = parse(&data);
+        for (surface, text) in [
+            ("markdown", markdown(&doc)),
+            ("plain text", doc.plain_text()),
+        ] {
+            let found = non_text_controls(&text);
+            assert!(
+                found.is_empty(),
+                "{surface} of {name} carries {} control character(s): {:?}",
+                found.len(),
+                &found[..found.len().min(8)]
+            );
         }
     }
-    assert!(checked > 0, "test-files/ exists but held no parsable PDF");
 }
 
 // ---------------------------------------------------------------------------

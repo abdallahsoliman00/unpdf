@@ -3,7 +3,6 @@
 //! 스캐너가 만드는 구조(전면 이미지 + 텍스트 레이어 유무)를 최소로 재현한다.
 #![allow(dead_code)] // 각 테스트 파일이 필요한 빌더만 사용한다.
 
-pub mod fidelity;
 #[cfg(feature = "ai")]
 pub mod mock_ai;
 
@@ -277,6 +276,39 @@ pub fn repeated_logo_pdf(pages: usize) -> Vec<u8> {
     objects.push(HELVETICA.to_vec());
 
     assemble(objects)
+}
+
+/// One page carrying a single AcroForm text field, `FirstName` = `John`, as a widget
+/// annotation on that page.
+pub fn form_pdf() -> Vec<u8> {
+    let objects: Vec<Vec<u8>> = vec![
+        b"<</Type/Catalog/Pages 2 0 R/AcroForm<</Fields[4 0 R]>>>>".to_vec(),
+        b"<</Type/Pages/Kids[3 0 R]/Count 1>>".to_vec(),
+        b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Annots[4 0 R]>>".to_vec(),
+        b"<</Type/Annot/Subtype/Widget/FT/Tx/T(FirstName)/V(John)/Rect[72 700 272 720]>>".to_vec(),
+    ];
+    assemble(objects)
+}
+
+/// Every single-document fixture in this module, by name, for properties that must hold on
+/// any well-formed document (the sweeps in `document_integrity_test` and `text_hygiene_test`).
+/// Listing a new fixture here enrolls it in those sweeps.
+pub fn all_fixtures() -> Vec<(&'static str, Vec<u8>)> {
+    vec![
+        ("image_only_pdf", image_only_pdf()),
+        ("text_pdf", text_pdf()),
+        ("bordered_table_pdf", bordered_table_pdf()),
+        ("heading_paragraph_pdf", heading_paragraph_pdf()),
+        ("list_items_pdf", list_items_pdf()),
+        ("two_column_pdf", two_column_pdf()),
+        ("cjk_pdf", cjk_pdf()),
+        ("blank_pdf", blank_pdf()),
+        ("mixed_pdf", mixed_pdf()),
+        ("image_only_jpeg_pdf", image_only_jpeg_pdf()),
+        ("text_with_inline_image_pdf", text_with_inline_image_pdf()),
+        ("repeated_logo_pdf(3)", repeated_logo_pdf(3)),
+        ("form_pdf", form_pdf()),
+    ]
 }
 
 /// A 100×100 `/DCTDecode` image XObject. The bytes are a JPEG SOI/EOI stub, not a
