@@ -272,4 +272,70 @@ mod tests {
         let key = hex("2b7e151628aed2a6abf7158809cf4f3c");
         assert_eq!(decrypt_aes128(&key, &[0u8; 16]), Some(vec![]));
     }
+
+    /// Fixed inputs for the key-derivation known answers below: password `user`, a 128-bit
+    /// key, `/O` = bytes 0..32, `/P` = -3904, first `/ID` element = bytes 0xA0..0xB0.
+    fn params(revision: u32, encrypt_metadata: bool, user_hash: Vec<u8>) -> EncryptionParams {
+        EncryptionParams {
+            version: if revision >= 4 { 4 } else { 2 },
+            revision,
+            key_length: 128,
+            owner_hash: (0u8..32).collect(),
+            user_hash,
+            permissions: -3904,
+            file_id: (0xA0u8..0xB0).collect(),
+            use_aes: false,
+            encrypt_metadata,
+        }
+    }
+
+    const KEY_WITH_METADATA: &str = "487b5108a900b1d3db085f6af0dcd409";
+    const KEY_WITHOUT_METADATA: &str = "349c930e1743c5ba5db910fb4a2d4aab";
+
+    /// Algorithm 2, step f: at revision 4, `/EncryptMetadata false` appends four 0xFF bytes to
+    /// the hash input, so the file key differs from the default. The expected keys were
+    /// computed from the spec with an independent implementation, not with this code.
+    #[test]
+    fn unencrypted_metadata_changes_the_revision_4_file_key() {
+        assert_eq!(
+            compute_encryption_key(&params(4, true, vec![]), b"user"),
+            hex(KEY_WITH_METADATA)
+        );
+        assert_eq!(
+            compute_encryption_key(&params(4, false, vec![]), b"user"),
+            hex(KEY_WITHOUT_METADATA)
+        );
+    }
+
+    /// Step f applies from revision 4 on; at revision 3 the flag changes nothing.
+    #[test]
+    fn revision_3_ignores_the_encrypt_metadata_flag() {
+        for encrypt_metadata in [true, false] {
+            assert_eq!(
+                compute_encryption_key(&params(3, encrypt_metadata, vec![]), b"user"),
+                hex(KEY_WITH_METADATA)
+            );
+        }
+    }
+
+    /// The password check runs on that key: a `/U` written for a document whose metadata is
+    /// not encrypted authenticates only when the flag is honoured, and never with the wrong
+    /// password.
+    #[test]
+    fn a_user_hash_for_unencrypted_metadata_needs_the_flag_to_authenticate() {
+        let user_hash = hex("766ae16c276153e66056c89cd6d8d8da00000000000000000000000000000000");
+
+        assert_eq!(
+            authenticate_user_password(&params(4, false, user_hash.clone()), b"user"),
+            Some(hex(KEY_WITHOUT_METADATA))
+        );
+        assert_eq!(
+            authenticate_user_password(&params(4, true, user_hash.clone()), b"user"),
+            None
+        );
+        assert_eq!(
+            authenticate_user_password(&params(4, false, user_hash), b"wrong"),
+            None
+        );
+    }
 }
