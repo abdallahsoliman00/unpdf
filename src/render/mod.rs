@@ -20,5 +20,5 @@ pub use result::{ExtractionStats, RenderResult};
 pub use streaming::{collect_content, RenderEvent, StreamingRenderer};
 pub use text::to_text;
 #[cfg(feature = "refine")]
-pub use unrefine::{refine, RefineOptions};
+pub use unparser_shared::refine::{refine, RefineOptions};
 pub use visitor::{CompositeVisitor, DefaultVisitor, DocumentVisitor, VisitorAction};

@@ -4,6 +4,16 @@
 
 ### Changed
 
+- **Breaking:** the shared plumbing — error-kind numbering, the C-ABI helpers, (feature `refine`)
+  the markdown shape-refinement pass and (feature `ai`) the VLM capabilities — now comes from one
+  crate, `unparser-shared`, instead of three (`uncore`, `unrefine` and `unparser-shared`
+  together). `refine` and `RefineOptions` are still re-exported from this crate at the same
+  paths, so code that names them through `unpdf` is unaffected. Code that named
+  `unrefine::RefineOptions` directly has to switch, because `RenderOptions::refine` now holds
+  `unparser_shared::refine::RefineOptions`. The refine pass itself now runs on `pulldown-cmark`
+  0.13 / `pulldown-cmark-to-cmark` 22 rather than 0.12 / 18. Error kinds, the C ABI and the
+  bindings are unchanged.
+
 - The declared minimum supported Rust version is now 1.89. It had said 1.87, which the crate
   has not actually built on for some time — a dependency in the tree raised its own floor —
   so anyone taking the manifest at its word got a compile error rather than a clear refusal.

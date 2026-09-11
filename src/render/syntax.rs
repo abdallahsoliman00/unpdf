@@ -113,10 +113,10 @@ fn render_html_row(output: &mut String, row: &TableRow, is_header: bool) {
 /// `<...>` when it contains a character CommonMark's bare-parenthesis destination form
 /// forbids. A destination with a raw space is not valid CommonMark outside `<...>` at
 /// all -- `pulldown-cmark` does not even produce a `Link`/`Image` event for it, so a
-/// consumer sees the brackets as literal text instead of a link (found while building
-/// `unrefine`, cycle-23; `<`/`>` themselves are the only other characters the bare form
-/// forbids). Both renderers build a destination from data the document held (a
-/// hyperlink target, a resource id) that can legitimately contain either.
+/// consumer sees the brackets as literal text instead of a link (`<`/`>` themselves are
+/// the only other characters the bare form forbids). Both renderers build a destination
+/// from data the document held (a hyperlink target, a resource id) that can legitimately
+/// contain either.
 pub(super) fn format_link_destination(url: &str) -> String {
     if url.contains(' ') || url.contains(['<', '>']) {
         // Backslash-escape, not percent-encode: a link destination is data, and

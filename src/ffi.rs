@@ -17,7 +17,7 @@
 use std::ffi::{c_char, c_int};
 use std::ptr;
 
-use uncore::ffi::{self, invalid_argument, FfiError, LastErrorSlot};
+use unparser_shared::ffi::{self, invalid_argument, FfiError, LastErrorSlot};
 
 use crate::error::ErrorKind;
 use crate::model::Document;
@@ -25,26 +25,26 @@ use crate::parser::{ErrorMode, ExtractMode, ParseOptions};
 use crate::render::{JsonFormat, PageMarkerStyle, PageSelection, RenderOptions};
 
 // Thread-local storage for the last error message and its classification. Declared
-// here rather than in `uncore` — see that crate's `ffi` module docs for why the slot
+// here rather than in `unparser-shared` — see that crate's `ffi` module docs for why the slot
 // must live in the consuming crate.
 thread_local! {
     static LAST_ERROR: LastErrorSlot = const { LastErrorSlot::new() };
 }
 
-uncore::export_last_error_abi!(LAST_ERROR, unpdf_last_error, unpdf_last_error_kind);
+unparser_shared::export_last_error_abi!(LAST_ERROR, unpdf_last_error, unpdf_last_error_kind);
 
 /// `unpdf_last_error_kind` value when no error is recorded on this thread.
-pub const UNPDF_ERROR_NONE: c_int = uncore::kind::NONE;
+pub const UNPDF_ERROR_NONE: c_int = unparser_shared::kind::NONE;
 
 // Values 1..=17 are [`ErrorKind`] discriminants — core failure reasons.
 // Values 100+ are FFI-boundary reasons with no core `Error` counterpart.
 
 /// An argument was null or not valid UTF-8.
-pub const UNPDF_ERROR_INVALID_ARGUMENT: c_int = uncore::kind::INVALID_ARGUMENT;
+pub const UNPDF_ERROR_INVALID_ARGUMENT: c_int = unparser_shared::kind::INVALID_ARGUMENT;
 /// A panic was caught at the FFI boundary.
-pub const UNPDF_ERROR_PANIC: c_int = uncore::kind::PANIC;
+pub const UNPDF_ERROR_PANIC: c_int = unparser_shared::kind::PANIC;
 /// The produced output contains an interior NUL byte and cannot cross the C ABI.
-pub const UNPDF_ERROR_INVALID_OUTPUT: c_int = uncore::kind::INVALID_OUTPUT;
+pub const UNPDF_ERROR_INVALID_OUTPUT: c_int = unparser_shared::kind::INVALID_OUTPUT;
 
 /// Classify a core error and render its message, for return from a closure.
 fn ffi_err(e: crate::Error) -> FfiError {
@@ -56,7 +56,7 @@ fn json_err(e: serde_json::Error) -> FfiError {
     (ErrorKind::Render as c_int, e.to_string())
 }
 
-uncore::export_handle! {
+unparser_shared::export_handle! {
     /// Opaque handle to a parsed document.
     handle UnpdfDocument { inner: Document },
 
@@ -266,7 +266,7 @@ unsafe fn render_options_from_json(ptr: *const c_char) -> Result<RenderOptions, 
     if ptr.is_null() {
         return Ok(RenderOptions::default());
     }
-    let json = uncore::with_c_str!(ptr)?;
+    let json = unparser_shared::with_c_str!(ptr)?;
     let ffi = serde_json::from_str::<FfiRenderOptions>(json)
         .map_err(|e| invalid_argument(format!("invalid options_json: {e}")))?;
     RenderOptions::try_from(ffi).map_err(|e| invalid_argument(format!("invalid options_json: {e}")))
@@ -298,7 +298,7 @@ pub unsafe extern "C" fn unpdf_parse_file(path: *const c_char) -> *mut UnpdfDocu
     LAST_ERROR.with(|slot| slot.clear());
 
     let result: Result<*mut UnpdfDocument, FfiError> = ffi::catch(|| {
-        let path_str = uncore::with_c_str!(path)?;
+        let path_str = unparser_shared::with_c_str!(path)?;
 
         crate::parse_file(path_str)
             .map(|doc| Box::into_raw(Box::new(UnpdfDocument { inner: doc })))
@@ -527,7 +527,7 @@ unsafe fn parse_options_from_json(ptr: *const c_char) -> Result<ParseOptions, Ff
     if ptr.is_null() {
         return Ok(ParseOptions::default());
     }
-    let json = uncore::with_c_str!(ptr)?;
+    let json = unparser_shared::with_c_str!(ptr)?;
     let ffi = serde_json::from_str::<FfiParseOptions>(json)
         .map_err(|e| invalid_argument(format!("invalid options_json: {e}")))?;
     ParseOptions::try_from(ffi).map_err(|e| invalid_argument(format!("invalid options_json: {e}")))
@@ -550,7 +550,7 @@ pub unsafe extern "C" fn unpdf_parse_file_with_options(
     LAST_ERROR.with(|slot| slot.clear());
 
     let result: Result<*mut UnpdfDocument, FfiError> = ffi::catch(|| {
-        let path_str = uncore::with_c_str!(path)?;
+        let path_str = unparser_shared::with_c_str!(path)?;
         let options = parse_options_from_json(options_json)?;
 
         crate::parse_file_with_options(path_str, options)
@@ -607,7 +607,7 @@ pub unsafe extern "C" fn unpdf_parse_bytes_with_options(
     }
 }
 
-uncore::export_string_getter!(
+unparser_shared::export_string_getter!(
     /// Convert a document to Markdown.
     ///
     /// # Safety
@@ -625,7 +625,7 @@ uncore::export_string_getter!(
     }
 );
 
-uncore::export_string_getter!(
+unparser_shared::export_string_getter!(
     /// Convert a document to Markdown, with options.
     ///
     /// The counterpart to `unpdf_to_markdown`'s flag bitmask, which reaches only four
@@ -650,7 +650,7 @@ uncore::export_string_getter!(
     }
 );
 
-uncore::export_string_getter!(
+unparser_shared::export_string_getter!(
     /// Convert a document to plain text.
     ///
     /// # Safety
@@ -667,7 +667,7 @@ uncore::export_string_getter!(
     }
 );
 
-uncore::export_string_getter!(
+unparser_shared::export_string_getter!(
     /// Convert a document to JSON.
     ///
     /// # Safety
@@ -689,7 +689,7 @@ uncore::export_string_getter!(
     }
 );
 
-uncore::export_string_getter!(
+unparser_shared::export_string_getter!(
     /// Get the plain text content of a document.
     ///
     /// # Safety
@@ -705,7 +705,7 @@ uncore::export_string_getter!(
     }
 );
 
-uncore::export_count_getter!(
+unparser_shared::export_count_getter!(
     /// Get the number of sections (pages) in a document.
     ///
     /// # Safety
@@ -720,7 +720,7 @@ uncore::export_count_getter!(
     }
 );
 
-uncore::export_count_getter!(
+unparser_shared::export_count_getter!(
     /// Get the number of extracted resources (images) in a document.
     ///
     /// Semantics: counts entries in the document's resource inventory, which is
@@ -744,7 +744,7 @@ uncore::export_count_getter!(
     }
 );
 
-uncore::export_optional_string_getter!(
+unparser_shared::export_optional_string_getter!(
     /// Get the document title.
     ///
     /// # Safety
@@ -763,7 +763,7 @@ uncore::export_optional_string_getter!(
     }
 );
 
-uncore::export_optional_string_getter!(
+unparser_shared::export_optional_string_getter!(
     /// Get the document author.
     ///
     /// # Safety
@@ -782,7 +782,7 @@ uncore::export_optional_string_getter!(
     }
 );
 
-uncore::export_string_getter!(
+unparser_shared::export_string_getter!(
     /// Get all resource IDs as a JSON array.
     ///
     /// # Safety
@@ -799,7 +799,7 @@ uncore::export_string_getter!(
     }
 );
 
-uncore::export_string_getter!(
+unparser_shared::export_string_getter!(
     /// Get extraction quality diagnostics as a JSON object.
     ///
     /// Fields: `char_count`, `word_count`, `replacement_char_count`, `encrypted`,
@@ -821,7 +821,7 @@ uncore::export_string_getter!(
     }
 );
 
-uncore::export_string_getter!(
+unparser_shared::export_string_getter!(
     /// Get per-page content-stream operator statistics as a JSON object.
     ///
     /// Returns `{"page":N,"text_op_count":N,"image_op_count":N,"ocr_text_suppressed":bool}`.
@@ -870,7 +870,7 @@ uncore::export_string_getter!(
     }
 );
 
-uncore::export_string_getter!(
+unparser_shared::export_string_getter!(
     /// Get resource metadata as JSON (without binary data).
     ///
     /// # Safety
@@ -882,7 +882,7 @@ uncore::export_string_getter!(
     LAST_ERROR,
     unpdf_get_resource_info(doc: UnpdfDocument, resource_id: *const c_char),
     {
-        let id_str = uncore::with_c_str!(resource_id)?;
+        let id_str = unparser_shared::with_c_str!(resource_id)?;
 
         let document = &(*doc).inner;
 
@@ -907,7 +907,7 @@ uncore::export_string_getter!(
     }
 );
 
-uncore::export_bytes_getter!(
+unparser_shared::export_bytes_getter!(
     /// Get resource binary data.
     ///
     /// # Safety
@@ -920,7 +920,7 @@ uncore::export_bytes_getter!(
     LAST_ERROR,
     unpdf_get_resource_data(doc: UnpdfDocument, resource_id, out out_len),
     {
-        let id_str = uncore::ffi::c_str_utf8(resource_id)?;
+        let id_str = unparser_shared::ffi::c_str_utf8(resource_id)?;
 
         let document = &(*doc).inner;
 
@@ -934,7 +934,7 @@ uncore::export_bytes_getter!(
     }
 );
 
-uncore::export_string_getter!(
+unparser_shared::export_string_getter!(
     /// Convert a single page to Markdown.
     ///
     /// # Safety
@@ -969,7 +969,7 @@ uncore::export_string_getter!(
     }
 );
 
-uncore::export_string_getter!(
+unparser_shared::export_string_getter!(
     /// Get the plain text of a single page.
     ///
     /// # Safety
@@ -997,7 +997,7 @@ uncore::export_string_getter!(
     }
 );
 
-uncore::export_free_string!(
+unparser_shared::export_free_string!(
     /// Free a string allocated by this library.
     ///
     /// # Safety
@@ -1007,7 +1007,7 @@ uncore::export_free_string!(
     unpdf_free_string
 );
 
-uncore::export_free_bytes!(
+unparser_shared::export_free_bytes!(
     /// Free binary data allocated by `unpdf_get_resource_data`.
     ///
     /// # Safety

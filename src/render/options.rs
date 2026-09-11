@@ -34,13 +34,13 @@ pub struct RenderOptions {
     /// Text cleanup options
     pub cleanup: Option<CleanupOptions>,
 
-    /// Shape-refinement pass ([`unrefine::refine`]) applied after cleanup.
+    /// Shape-refinement pass ([`unparser_shared::refine::refine`]) applied after cleanup.
     /// Lossless and idempotent — normalizes table shape, ordered-list
     /// numbering, link/image paths, frontmatter, and section anchors without
     /// deleting any visible text. If `None` (the default), no refinement is
     /// performed and output is unchanged from pre-`refine` behavior.
     #[cfg(feature = "refine")]
-    pub refine: Option<unrefine::RefineOptions>,
+    pub refine: Option<unparser_shared::refine::RefineOptions>,
 
     /// AI-assisted markdown refine — a generative rewrite pass applied after
     /// `refine`. Unlike `refine`, not lossless/idempotent by construction: a
@@ -126,7 +126,7 @@ impl RenderOptions {
     /// Enable the shape-refinement pass with default options.
     #[cfg(feature = "refine")]
     pub fn with_refine(mut self) -> Self {
-        self.refine = Some(unrefine::RefineOptions::default());
+        self.refine = Some(unparser_shared::refine::RefineOptions::default());
         self
     }
 

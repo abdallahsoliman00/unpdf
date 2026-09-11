@@ -102,7 +102,7 @@ impl MarkdownRenderer {
         // page doesn't have.
         #[cfg(feature = "refine")]
         let output = match self.options.refine {
-            Some(ref refine_options) => unrefine::refine(&output, refine_options),
+            Some(ref refine_options) => unparser_shared::refine::refine(&output, refine_options),
             None => output,
         };
 
@@ -350,7 +350,7 @@ mod tests {
 
     /// `RenderOptions::default()` leaves `refine` off — the last line of
     /// defense protecting deployed consumers. A backslash-separated link
-    /// path is exactly the kind of value `unrefine`'s link normalization
+    /// path is exactly the kind of value `unparser_shared::refine`'s link normalization
     /// pass would touch, so its survival here proves refine did not run.
     #[cfg(feature = "refine")]
     #[test]
@@ -376,9 +376,9 @@ mod tests {
         );
     }
 
-    /// `render_internal` wires `RenderOptions.refine` into `unrefine::refine`
+    /// `render_internal` wires `RenderOptions.refine` into `unparser_shared::refine::refine`
     /// after cleanup -- this exercises that wiring end to end, not
-    /// `unrefine`'s own pass logic (that's `unrefine`'s test suite).
+    /// the refine pass's own logic (that's `unparser-shared`'s test suite).
     #[cfg(feature = "refine")]
     #[test]
     fn test_refine_on_normalizes_backslash_link_paths() {
@@ -439,7 +439,7 @@ mod tests {
     fn test_link_destination_with_a_space_is_angle_wrapped() {
         // Regression: a bare `(dest with space)` is not valid CommonMark syntax at all --
         // pulldown-cmark never produces a Link event for it, so a consumer sees the
-        // brackets as literal text instead of a link (unrefine cycle-23 finding).
+        // brackets as literal text instead of a link.
         let mut doc = Document::new();
         let mut page = Page::letter(1);
         let mut para = Paragraph::new();

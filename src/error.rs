@@ -195,7 +195,7 @@ mod tests {
     // renumbering shows up as a failure instead of as silently misclassified errors in
     // a consumer. Adding a reason means adding a line with the next free number —
     // never reusing or shifting one.
-    uncore::assert_stable_kinds! {
+    unparser_shared::assert_stable_kinds! {
         ErrorKind, test_error_kind_discriminants_are_stable,
         Other = 1,
         Io = 2,
