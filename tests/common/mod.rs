@@ -290,6 +290,49 @@ pub fn form_pdf() -> Vec<u8> {
     assemble(objects)
 }
 
+// Damaged documents. Deliberately **not** listed in `all_fixtures`, whose sweeps assert
+// properties every well-formed document must have.
+
+/// Bytes that claim `/FlateDecode` but no decoder accepts: no zlib header begins 0xFF 0xFF.
+const NOT_FLATE: &[u8] = &[0xFF; 16];
+
+/// One text page whose only content stream cannot be decoded.
+pub fn undecodable_content_pdf() -> Vec<u8> {
+    let objects: Vec<Vec<u8>> = vec![
+        b"<</Type/Catalog/Pages 2 0 R>>".to_vec(),
+        b"<</Type/Pages/Kids[3 0 R]/Count 1>>".to_vec(),
+        b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]\
+          /Resources<</Font<</F1 5 0 R>>>>/Contents 4 0 R>>"
+            .to_vec(),
+        stream_object(
+            &format!("<</Length {}/Filter/FlateDecode>>", NOT_FLATE.len()),
+            NOT_FLATE,
+        ),
+        HELVETICA.to_vec(),
+    ];
+    assemble(objects)
+}
+
+/// One text page whose content is an array of two streams: the first draws "Hello World",
+/// the second cannot be decoded.
+pub fn partly_undecodable_content_pdf() -> Vec<u8> {
+    let content = b"BT /F1 12 Tf 72 720 Td (Hello World) Tj ET\n";
+    let objects: Vec<Vec<u8>> = vec![
+        b"<</Type/Catalog/Pages 2 0 R>>".to_vec(),
+        b"<</Type/Pages/Kids[3 0 R]/Count 1>>".to_vec(),
+        b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]\
+          /Resources<</Font<</F1 6 0 R>>>>/Contents[4 0 R 5 0 R]>>"
+            .to_vec(),
+        stream_object(&format!("<</Length {}>>", content.len()), content),
+        stream_object(
+            &format!("<</Length {}/Filter/FlateDecode>>", NOT_FLATE.len()),
+            NOT_FLATE,
+        ),
+        HELVETICA.to_vec(),
+    ];
+    assemble(objects)
+}
+
 /// Every single-document fixture in this module, by name, for properties that must hold on
 /// any well-formed document (the sweeps in `document_integrity_test` and `text_hygiene_test`).
 /// Listing a new fixture here enrolls it in those sweeps.

@@ -253,6 +253,19 @@ pub(crate) fn parse_single_page(
         let (text_ops, image_ops) = analyzer.page_op_counts();
         page.text_op_count = text_ops;
         page.image_op_count = image_ops;
+
+        // A content stream that could not be decoded is content this page lost. Lenient
+        // keeps what the other streams hold; strict fails the page, exactly as it does
+        // when the page's only content stream cannot be decoded.
+        let undecodable = analyzer.undecodable_content_streams();
+        if undecodable > 0 {
+            if options.error_mode == ErrorMode::Strict {
+                return Err(Error::PdfParse(format!(
+                    "page {page_num}: {undecodable} content stream(s) could not be decoded"
+                )));
+            }
+            log::warn!("page {page_num}: left out {undecodable} undecodable content stream(s)");
+        }
     }
 
     // 이미지(XObject) 수집 — extract_resources 가 활성화된 경우.

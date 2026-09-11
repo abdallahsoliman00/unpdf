@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- `ErrorMode::Strict` now fails a page whose content is split across several streams when
+  one of those streams cannot be decoded. The undecodable stream was left out and the rest
+  of the page reported as complete — while a page whose only content stream could not be
+  decoded already failed under strict. Lenient parsing (the default) still keeps what the
+  other streams hold.
+
+### Added
+
+- `PdfBackend::page_content_with_losses`, returning the page's content together with the
+  number of content streams that could not be decoded (`PageContent`). It has a default
+  implementation, so existing backends are unaffected.
+
 ## 0.19.0 — 2026-09-11
 
 ### Changed

@@ -82,6 +82,29 @@ pub struct RawXObject {
     pub color_space: Option<String>,
 }
 
+/// A page's decoded content, together with what decoding it had to drop.
+///
+/// A page's content may be split across several streams. When some of them cannot be
+/// decoded the rest still carry content, so the bytes are kept -- but the loss is
+/// reported, so a strict caller can fail the page instead of presenting it as complete.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PageContent {
+    /// The decoded content of every stream that could be decoded, in order.
+    pub data: Vec<u8>,
+    /// Content streams of the page that could not be decoded and were left out of `data`.
+    pub undecodable_streams: usize,
+}
+
+impl PageContent {
+    /// Content decoded without losing anything.
+    pub fn complete(data: Vec<u8>) -> Self {
+        Self {
+            data,
+            undecodable_streams: 0,
+        }
+    }
+}
+
 /// What a backend had to drop while reading the document structure.
 ///
 /// Reported alongside the extracted text so a caller can tell "this document says
@@ -180,6 +203,15 @@ pub trait PdfBackend: Send + Sync {
 
     /// Return the raw (decompressed) content stream bytes for a page.
     fn page_content(&self, page: PageId) -> Result<Vec<u8>>;
+
+    /// Like [`page_content`](Self::page_content), but also reports content streams that
+    /// could not be decoded.
+    ///
+    /// Defaults to "nothing dropped" so a backend that cannot tell partial decoding apart
+    /// does not claim a loss it did not observe -- the same default as [`integrity`](Self::integrity).
+    fn page_content_with_losses(&self, page: PageId) -> Result<PageContent> {
+        self.page_content(page).map(PageContent::complete)
+    }
 
     /// Parse raw content stream bytes into a sequence of operations.
     fn decode_content(&self, data: &[u8]) -> Result<Vec<ContentOp>>;
@@ -306,6 +338,11 @@ impl PdfBackend for RawBackend {
     }
 
     fn page_content(&self, page_id: PageId) -> Result<Vec<u8>> {
+        self.page_content_with_losses(page_id)
+            .map(|content| content.data)
+    }
+
+    fn page_content_with_losses(&self, page_id: PageId) -> Result<PageContent> {
         let page_dict = self
             .doc
             .get_dict(page_id)
@@ -324,13 +361,16 @@ impl PdfBackend for RawBackend {
                     .ok_or_else(|| Error::PdfParse("Content stream not found".to_string()))?;
                 let resolved = self.doc.resolve(obj);
                 if let Some(stream) = resolved.as_stream() {
-                    return raw_stream::decompress(stream);
+                    return raw_stream::decompress(stream).map(PageContent::complete);
                 }
                 Err(Error::PdfParse("Invalid content stream".to_string()))
             }
-            RawPdfObject::Stream(stream) => raw_stream::decompress(stream),
+            RawPdfObject::Stream(stream) => {
+                raw_stream::decompress(stream).map(PageContent::complete)
+            }
             RawPdfObject::Array(arr) => {
                 let mut content = Vec::new();
+                let mut undecodable_streams = 0;
                 for item in arr {
                     let resolved = self.doc.resolve(item);
                     let stream_obj = match resolved {
@@ -348,12 +388,20 @@ impl PdfBackend for RawBackend {
                         }
                         _ => continue,
                     };
-                    if let Ok(data) = raw_stream::decompress(stream_obj) {
-                        content.extend_from_slice(&data);
-                        content.push(b' ');
+                    // A part that cannot be decoded is left out and counted, not hidden:
+                    // the other parts still carry content, but the page is incomplete.
+                    match raw_stream::decompress(stream_obj) {
+                        Ok(data) => {
+                            content.extend_from_slice(&data);
+                            content.push(b' ');
+                        }
+                        Err(_) => undecodable_streams += 1,
                     }
                 }
-                Ok(content)
+                Ok(PageContent {
+                    data: content,
+                    undecodable_streams,
+                })
             }
             _ => Err(Error::PdfParse("Invalid content stream".to_string())),
         }
