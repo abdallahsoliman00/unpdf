@@ -576,6 +576,34 @@ for field in &doc.form_fields {
 }
 ```
 
+### Error Handling Defaults
+
+**Parsing is lenient by default.** A PDF that is damaged in one place still yields the pages
+and text that could be read, rather than failing whole. That is the useful default for a
+format where partial damage is common and a caller usually wants whatever survived.
+
+The cost of a lenient default is that a successful call can return less than the document
+held, so every kind of loss is counted rather than swallowed — see
+[Detecting Incomplete Extraction](#detecting-incomplete-extraction) below, and check
+`extraction_quality` on any result you intend to index or archive.
+
+Opt into failing instead:
+
+```rust
+use unpdf::{parse_file_with_options, ErrorMode, ParseOptions};
+
+let options = ParseOptions::new().with_error_mode(ErrorMode::Strict);
+let doc = parse_file_with_options("document.pdf", options)?;
+```
+
+Under `Strict` the same damage is an error: a content stream that cannot be decoded fails the
+document instead of leaving a shorter page. A page that legitimately has no content at all is
+not damage and stays a success in both modes.
+
+Its sibling parsers answer this differently, because the formats do: `unhwp` defaults to
+strict, and `undoc` has no error mode at all. Code that drives all three should not assume a
+shared default.
+
 ### Classifying Failures
 
 `Error::kind()` returns a stable `ErrorKind` so you can branch on *why* a call failed

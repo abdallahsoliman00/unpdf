@@ -16,6 +16,10 @@
 
 ### Added
 
+- `ErrorMode` and `ExtractMode` are re-exported at the crate root, alongside the
+  `ParseOptions` they configure. Naming the enum required reaching into `unpdf::parser`
+  while the struct it fills was already at the root.
+
 - `PdfBackend::page_content_with_losses`, returning the page's content together with the
   number of content streams that could not be decoded (`PageContent`). It has a default
   implementation, so existing backends are unaffected.
@@ -31,6 +35,14 @@
 - The built-in backend's `page_content` now fails when none of a page's content streams can
   be decoded. A page whose content array failed entirely used to return empty content, while
   a page with a single failed stream already failed — both now behave the same.
+
+### Documentation
+
+- The README states the default error mode and what a lenient default costs. Parsing has
+  always been lenient by default, and a successful call can therefore return less than the
+  document held; that was only discoverable from the source. The section also points at the
+  `extraction_quality` fields that count each kind of loss, and notes that the sibling
+  parsers default differently.
 
 ## 0.19.0 — 2026-09-11
 

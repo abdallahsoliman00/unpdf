@@ -126,7 +126,7 @@ absent key keeps unpdf's own default:
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `error_mode` | `"strict"` \| `"lenient"` | `"lenient"` | Fail on any parse error, or skip invalid content and continue. |
+| `error_mode` | `"strict"` \| `"lenient"` | `"lenient"` | Fail on any parse error, or skip invalid content and continue. Lenient is the default, so a successful call can return less than the document held — the quality fields below say how much. |
 | `extract_mode` | `"full"` \| `"text_only"` \| `"structure_only"` | `"full"` | What to extract. |
 | `extract_resources` | `bool` | `False` | Populate the resource inventory `get_resource_ids` etc. read from. Off by default — bounds peak memory on large PDFs. |
 | `min_image_dimension` | `int` | `64` | Images below this on either axis are dropped as decorative (logos, rule lines, tracking pixels). `0` keeps every image. |
