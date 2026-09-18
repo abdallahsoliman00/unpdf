@@ -218,50 +218,7 @@ impl TextLine {
                 continue;
             }
 
-            let prev_span = &self.spans[i - 1];
-
-            // Calculate gap between end of previous span and start of current span
-            let prev_end = prev_span.x + prev_span.width;
-            let gap = span.x - prev_end;
-
-            // Estimate average character width from current span
-            let char_count = span.text.chars().count();
-            let avg_char_width = if char_count > 0 && span.width > 0.0 {
-                span.width / char_count as f32
-            } else {
-                span.font_size * 0.5 // Fallback: assume half of font size
-            };
-
-            // Check if we need to insert a space
-            // Gap threshold: if gap is more than 20% of average char width, insert space
-            let space_threshold = avg_char_width * 0.2;
-
-            // Get last char of previous span and first char of current span
-            let prev_last_char = prev_span.text.chars().last();
-            let curr_first_char = span.text.chars().next();
-
-            let should_insert_space = if gap > space_threshold {
-                // Check if both characters are CJK (no space needed between CJK chars)
-                let prev_is_cjk = prev_last_char
-                    .map(is_spaceless_script_char)
-                    .unwrap_or(false);
-                let curr_is_cjk = curr_first_char
-                    .map(is_spaceless_script_char)
-                    .unwrap_or(false);
-
-                // Don't insert space between CJK characters
-                !(prev_is_cjk && curr_is_cjk)
-            } else {
-                false
-            };
-
-            // Also check if previous span ends with space or current starts with space
-            let prev_ends_with_space =
-                prev_span.text.ends_with(' ') || prev_span.text.ends_with('\u{00A0}');
-            let curr_starts_with_space =
-                span.text.starts_with(' ') || span.text.starts_with('\u{00A0}');
-
-            if should_insert_space && !prev_ends_with_space && !curr_starts_with_space {
+            if should_insert_space_between(&self.spans[i - 1], span) {
                 result.push(' ');
             }
 
@@ -274,6 +231,22 @@ impl TextLine {
         }
 
         result
+    }
+
+    /// The line's text broken into per-span pieces, with any gap-inserted space
+    /// attached to the span that precedes it. Each entry is `(text, span_index)`,
+    /// and concatenating the texts reproduces [`Self::text`] (minus BiDi
+    /// reordering, which operates on the joined string). The structured parser
+    /// uses this to build styled inline runs whose spacing matches `text()`.
+    pub(crate) fn styled_segments(&self) -> Vec<(String, usize)> {
+        let mut segs = Vec::with_capacity(self.spans.len());
+        for (i, span) in self.spans.iter().enumerate() {
+            if i > 0 && should_insert_space_between(&self.spans[i - 1], span) {
+                segs.push((" ".to_string(), i - 1));
+            }
+            segs.push((span.text.clone(), i));
+        }
+        segs
     }
 
     /// Check if the line is predominantly bold.
@@ -944,13 +917,15 @@ impl<'a> LayoutAnalyzer<'a> {
                         let (x, y) = apply_ctm(&ctm, tx, ty);
                         let effective_size =
                             current_font_size * text_matrix.get_scale() * ctm_y_scale(&ctm);
-                        spans.push(TextSpan::new(
+                        let mut span = TextSpan::new(
                             text,
                             x,
                             y,
                             effective_size,
                             current_font.clone(),
-                        ));
+                        );
+                        span.width = estimate_text_width(&span.text, effective_size);
+                        spans.push(span);
                     }
                 }
                 "'" | "\"" => {
@@ -1373,9 +1348,18 @@ impl<'a> LayoutAnalyzer<'a> {
         let mut lines: Vec<TextLine> = Vec::new();
         let mut current_line_spans: Vec<TextSpan> = Vec::new();
         let mut current_y: Option<f32> = None;
+        // Font size of the span that opened the current line. Used together with
+        // the incoming span's size so a large-font line can't pull a small-font
+        // neighbour onto its baseline (a 20pt title's 30% tolerance would
+        // otherwise swallow a 10pt line sitting a few points above it and the
+        // two would average into a mid-size pseudo-heading).
+        let mut current_line_font_size: f32 = 0.0;
 
         for span in spans {
-            let y_tolerance = span.font_size * 0.3; // Allow 30% of font size variance
+            // Allow 30% of font size variance, measured on the *smaller* of the
+            // two sizes so tolerance scales with the line, not with whichever
+            // span happens to arrive next.
+            let y_tolerance = span.font_size.min(current_line_font_size) * 0.3;
 
             if let Some(y) = current_y {
                 if (span.y - y).abs() <= y_tolerance {
@@ -1388,10 +1372,12 @@ impl<'a> LayoutAnalyzer<'a> {
                             &mut current_line_spans,
                         )));
                     }
+                    current_line_font_size = span.font_size;
                     current_y = Some(span.y);
                     current_line_spans.push(span);
                 }
             } else {
+                current_line_font_size = span.font_size;
                 current_y = Some(span.y);
                 current_line_spans.push(span);
             }
@@ -1436,28 +1422,42 @@ impl<'a> LayoutAnalyzer<'a> {
 
             // Uppercase stands in for bold: a run of capitals is how many PDFs mark a heading
             // whose font carries no bold variant.
-            let level =
+            let size_level =
                 font_stats.get_heading_level(line.font_size, line.is_bold() || line.is_uppercase());
-            if level == 0 {
+
+            // Style-based fallback: a short, bold, ALL-CAPS line at body size is a
+            // section header ("EDUCATION", "EXPERIENCE") even though its font size
+            // never reaches the size thresholds. Mixed-case bold lines (job titles,
+            // names-in-bold) are deliberately excluded by the uppercase test so they
+            // stay body text. These get a fixed level rather than a size tier.
+            let (level, from_size) = if size_level > 0 {
+                (size_level, true)
+            } else if line.is_bold() && line.is_uppercase() && visible_chars <= 40 {
+                (2, false)
+            } else {
                 continue;
-            }
+            };
 
             // Neighbour-context suppression — if EITHER adjacent line shares this line's font
             // size (±0.5pt), the line is probably one of a run of siblings: a table column, a
             // list, a paragraph whose body font drifts by a point or two between cells. A
             // heading normally sits alone within its size cohort. The `body_size + 6.0` escape
-            // keeps genuinely large headings that happen to be adjacent to another.
-            let prev_size = if i > 0 { Some(sizes[i - 1]) } else { None };
-            let next_size = if i + 1 < sizes.len() {
-                Some(sizes[i + 1])
-            } else {
-                None
-            };
-            let same = |a: f32, b: f32| (a - b).abs() < 0.5;
-            let matches_prev = prev_size.is_some_and(|p| same(p, line.font_size));
-            let matches_next = next_size.is_some_and(|n| same(n, line.font_size));
-            if (matches_prev || matches_next) && line.font_size < body_size + 6.0 {
-                continue;
+            // keeps genuinely large headings that happen to be adjacent to another. Only
+            // applies to size-based headings: a style-based header shares the body size with
+            // its neighbours by definition, so the check would always suppress it.
+            if from_size {
+                let prev_size = if i > 0 { Some(sizes[i - 1]) } else { None };
+                let next_size = if i + 1 < sizes.len() {
+                    Some(sizes[i + 1])
+                } else {
+                    None
+                };
+                let same = |a: f32, b: f32| (a - b).abs() < 0.5;
+                let matches_prev = prev_size.is_some_and(|p| same(p, line.font_size));
+                let matches_next = next_size.is_some_and(|n| same(n, line.font_size));
+                if (matches_prev || matches_next) && line.font_size < body_size + 6.0 {
+                    continue;
+                }
             }
 
             line.is_heading = true;
@@ -1790,7 +1790,11 @@ impl TextMatrix {
 ///
 /// TJ adjustments are in 1/1000 text space units. The threshold for inserting a space
 /// varies by script:
-/// - Latin: 200 units (~33% of typical char width ~600)
+/// - Latin: 120 units. Real-world word gaps sit well under the nominal ~250-unit
+///   space width of many fonts — EB Garamond body text, for example, spaces words
+///   with adjustments of ~167-200, while intra-word kerning and display-header
+///   letterspacing stay at or below ~95. 120 splits that gap; the previous 200
+///   threshold missed genuine word spaces and concatenated whole sentences.
 /// - Hangul (Korean): 500 units (~50% of typical char width 1000)
 ///   Korean uses word spaces, but kerning between syllables is typically 100-300 units.
 /// - CJK (Chinese/Japanese): never insert spaces (handled by is_spaceless_script_char)
@@ -1807,7 +1811,7 @@ fn maybe_insert_space_tj(text: &mut String, adjustment: f32) {
         let threshold = if is_hangul_char(last_char) {
             500.0
         } else {
-            200.0
+            120.0
         };
         if adjustment > threshold {
             text.push(' ');
@@ -1895,6 +1899,55 @@ fn median_font_size(spans: &[TextSpan]) -> f32 {
     sizes[sizes.len() / 2]
 }
 
+/// Decide whether a space belongs between two adjacent spans on the same line,
+/// based on the gap between the previous span's right edge and the current
+/// span's left edge. Shared by [`TextLine::text`] and [`TextLine::styled_segments`]
+/// so the plain-text and styled-run views of a line always agree on spacing.
+/// For CJK characters, no space is inserted between adjacent characters.
+fn should_insert_space_between(prev_span: &TextSpan, span: &TextSpan) -> bool {
+    // Calculate gap between end of previous span and start of current span
+    let prev_end = prev_span.x + prev_span.width;
+    let gap = span.x - prev_end;
+
+    // Estimate average character width from current span
+    let char_count = span.text.chars().count();
+    let avg_char_width = if char_count > 0 && span.width > 0.0 {
+        span.width / char_count as f32
+    } else {
+        span.font_size * 0.5 // Fallback: assume half of font size
+    };
+
+    // Gap threshold: if gap is more than 20% of average char width, insert space
+    let space_threshold = avg_char_width * 0.2;
+    if gap <= space_threshold {
+        return false;
+    }
+
+    // Don't insert a space between two CJK characters
+    let prev_is_cjk = prev_span
+        .text
+        .chars()
+        .last()
+        .map(is_spaceless_script_char)
+        .unwrap_or(false);
+    let curr_is_cjk = span
+        .text
+        .chars()
+        .next()
+        .map(is_spaceless_script_char)
+        .unwrap_or(false);
+    if prev_is_cjk && curr_is_cjk {
+        return false;
+    }
+
+    // Don't double up when either side already carries whitespace
+    let prev_ends_with_space =
+        prev_span.text.ends_with(' ') || prev_span.text.ends_with('\u{00A0}');
+    let curr_starts_with_space =
+        span.text.starts_with(' ') || span.text.starts_with('\u{00A0}');
+    !prev_ends_with_space && !curr_starts_with_space
+}
+
 /// Check if character is from a script that doesn't use word spaces.
 /// Chinese and Japanese don't use spaces between words, but Korean does.
 fn is_spaceless_script_char(c: char) -> bool {
@@ -1917,6 +1970,33 @@ fn is_spaceless_script_char(c: char) -> bool {
     // NOTE: Hangul (Korean) is NOT included - Korean uses word spaces like English
     // CJK Symbols and Punctuation
     || (0x3000..=0x303F).contains(&code)
+}
+
+/// Estimate the drawn width of a text run from its characters and font size.
+///
+/// The PDF text-showing operators don't report an advance width and unpdf does
+/// not parse the font's glyph-width tables, so `TextSpan.width` would otherwise
+/// stay 0 — which makes XY-Cut treat every span as a zero-width point and split
+/// a single-column page on any horizontal gap (e.g. right-aligned dates), and
+/// leaves the span-join spacing heuristic with nothing to measure against. A
+/// per-script average advance is enough to give layout a plausible bounding box:
+/// - CJK ideographs / kana / Hangul syllables: ~1.0 em (full-width)
+/// - whitespace: ~0.25 em
+/// - everything else (Latin, digits, punctuation): ~0.5 em
+fn estimate_text_width(text: &str, font_size: f32) -> f32 {
+    let ems: f32 = text
+        .chars()
+        .map(|c| {
+            if is_spaceless_script_char(c) || is_hangul_char(c) {
+                1.0
+            } else if c.is_whitespace() {
+                0.25
+            } else {
+                0.5
+            }
+        })
+        .sum();
+    ems * font_size
 }
 
 /// Merge adjacent fragmented spans that likely form words.
