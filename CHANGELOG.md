@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Documentation
+
+- `ExtractMode::TextOnly` is documented as behaving exactly like `Full`: nothing branches on
+  that variant, and only `StructureOnly` gates anything.
+
 ### Fixed
 
 - `ErrorMode::Strict` now fails a page whose content is split across several streams when

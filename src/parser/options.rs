@@ -181,7 +181,10 @@ pub enum ExtractMode {
     /// Extract everything (text, structure, resources)
     #[default]
     Full,
-    /// Extract text content only
+    /// Extract text content only.
+    ///
+    /// **Behaves exactly like [`Full`](Self::Full) today**: nothing branches on this
+    /// variant. Only [`StructureOnly`](Self::StructureOnly) gates anything.
     TextOnly,
     /// Extract structure only (no text content)
     StructureOnly,
