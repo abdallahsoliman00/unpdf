@@ -101,14 +101,16 @@ Get the version of the native library.
 ### `get_extraction_quality(source: PdfSource, options: dict | None = None) -> dict`
 Document-level extraction diagnostics: `char_count`, `word_count`,
 `replacement_char_count`, `encrypted`, `is_scan_pdf`, `suppressed_ocr_pages`,
-`suppressed_text_runs`,
+`suppressed_text_runs`, `undecodable_content_streams`,
 `pages_incomplete`, `declared_page_count`, `unresolved_page_nodes`,
 `skipped_object_count`, `unsupported_image_count`, `ai_fallback_count`. See
 "Incomplete extraction" below.
 
 ### `get_page_stats(source: PdfSource, page_number: int, options: dict | None = None) -> dict`
 Per-page content-stream operator counts (1-indexed): `page`, `text_op_count`,
-`image_op_count`, `ocr_text_suppressed`.
+`image_op_count`, `ocr_text_suppressed`, `suppressed_text_runs`,
+`undecodable_content_streams`. The last two are this page's share of the
+document-level counts of the same name.
 
 ### `get_resource_ids(source: PdfSource, options: dict | None = None) -> list[str]`
 ### `get_resource_info(source: PdfSource, resource_id: str, options: dict | None = None) -> dict`
@@ -124,7 +126,7 @@ absent key keeps unpdf's own default:
 
 | Key | Type | Default | Meaning |
 |---|---|---|---|
-| `error_mode` | `"strict"` \| `"lenient"` | `"lenient"` | Fail on any parse error, or skip invalid content and continue. |
+| `error_mode` | `"strict"` \| `"lenient"` | `"lenient"` | Fail on any parse error, or skip invalid content and continue. Lenient is the default, so a successful call can return less than the document held — the quality fields below say how much. |
 | `extract_mode` | `"full"` \| `"text_only"` \| `"structure_only"` | `"full"` | What to extract. |
 | `extract_resources` | `bool` | `False` | Populate the resource inventory `get_resource_ids` etc. read from. Off by default — bounds peak memory on large PDFs. |
 | `min_image_dimension` | `int` | `64` | Images below this on either axis are dropped as decorative (logos, rule lines, tracking pixels). `0` keeps every image. |

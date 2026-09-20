@@ -310,7 +310,8 @@ def get_extraction_quality(
     Returns:
         Dictionary with ``char_count``, ``word_count``, ``replacement_char_count``,
         ``encrypted``, ``is_scan_pdf``, ``suppressed_ocr_pages``,
-        ``suppressed_text_runs``, ``pages_incomplete``, ``declared_page_count``,
+        ``suppressed_text_runs``, ``undecodable_content_streams``,
+        ``pages_incomplete``, ``declared_page_count``,
         ``unresolved_page_nodes``, ``skipped_object_count``,
         ``unsupported_image_count``, ``ai_fallback_count``.
 
@@ -318,6 +319,12 @@ def get_extraction_quality(
         and discarded — content the document had and this output does not. Any
         non-zero value means the extraction is incomplete; the count is in runs,
         not characters, because the discarded text was never decoded.
+
+        ``undecodable_content_streams`` counts page content streams that could
+        not be decoded. Lenient parsing (the default) leaves them out and keeps
+        the rest of the page — an empty page when it was the page's only stream
+        — so any non-zero value means content is missing. Strict parsing fails
+        instead.
 
         ``unresolved_page_nodes`` counts unreadable page-tree *nodes*, not lost
         pages — one unreadable node can cost a whole subtree. Treat any non-zero
@@ -371,10 +378,11 @@ def get_page_stats(
 
     Returns:
         Dictionary with ``page``, ``text_op_count``, ``image_op_count``,
-        ``ocr_text_suppressed``, ``suppressed_text_runs``. ``suppressed_text_runs``
-        is this page's share of the document-level total reported by
-        :func:`get_extraction_quality` — the count of text runs the font decoder
-        could not read and discarded on this page.
+        ``ocr_text_suppressed``, ``suppressed_text_runs``,
+        ``undecodable_content_streams``. The last two are this page's share of the
+        document-level totals of the same name reported by
+        :func:`get_extraction_quality` — text runs the font decoder could not read
+        and discarded, and content streams that could not be decoded.
 
     Raises:
         UnpdfError: If parsing fails or the page is out of range

@@ -802,8 +802,11 @@ unparser_shared::export_string_getter!(
 unparser_shared::export_string_getter!(
     /// Get extraction quality diagnostics as a JSON object.
     ///
-    /// Fields: `char_count`, `word_count`, `replacement_char_count`, `encrypted`,
-    /// `is_scan_pdf`, `suppressed_ocr_pages`. `is_scan_pdf` is `true` when sampled
+    /// Fields are those of `ExtractionQuality`: `char_count`, `word_count`,
+    /// `replacement_char_count`, `encrypted`, `is_scan_pdf`, `suppressed_ocr_pages`,
+    /// `suppressed_text_runs`, `undecodable_content_streams`, `pages_incomplete`,
+    /// `declared_page_count`, `unresolved_page_nodes`, `skipped_object_count`,
+    /// `unsupported_image_count`, `ai_fallback_count`. `is_scan_pdf` is `true` when sampled
     /// pages draw images with no text-showing operators — the document-level
     /// "scanned document, OCR required" signal. For page-level discrimination
     /// (mixed documents) use `unpdf_page_stats`.
@@ -824,8 +827,11 @@ unparser_shared::export_string_getter!(
 unparser_shared::export_string_getter!(
     /// Get per-page content-stream operator statistics as a JSON object.
     ///
-    /// Returns `{"page":N,"text_op_count":N,"image_op_count":N,"ocr_text_suppressed":bool}`.
+    /// Returns `{"page":N,"text_op_count":N,"image_op_count":N,"ocr_text_suppressed":bool,
+    /// "suppressed_text_runs":N,"undecodable_content_streams":N}`.
     ///
+    /// - `suppressed_text_runs` / `undecodable_content_streams`: this page's share of the
+    ///   document-level counts of the same name in `unpdf_get_extraction_quality`.
     /// - `text_op_count`: number of text-showing operators (`Tj`/`TJ`/`'`/`"`).
     /// - `image_op_count`: number of XObject `Do` invocations (mostly images;
     ///   may include form XObjects).
@@ -865,6 +871,7 @@ unparser_shared::export_string_getter!(
             "image_op_count": page.image_op_count,
             "ocr_text_suppressed": page.ocr_text_suppressed,
             "suppressed_text_runs": page.suppressed_text_runs,
+            "undecodable_content_streams": page.undecodable_content_streams,
         }))
         .map_err(json_err)
     }

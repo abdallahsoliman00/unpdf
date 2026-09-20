@@ -82,6 +82,37 @@ pub struct RawXObject {
     pub color_space: Option<String>,
 }
 
+/// A page's decoded content, together with what decoding it had to drop.
+///
+/// A page's content may be split across several streams. When some of them cannot be
+/// decoded the rest still carry content, so the bytes are kept -- but the loss is
+/// reported, so a strict caller can fail the page instead of presenting it as complete.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PageContent {
+    /// The decoded content of every stream that could be decoded, in order.
+    pub data: Vec<u8>,
+    /// Content streams of the page that could not be decoded and were left out of `data`.
+    pub undecodable_streams: usize,
+}
+
+impl PageContent {
+    /// Content decoded without losing anything.
+    pub fn complete(data: Vec<u8>) -> Self {
+        Self {
+            data,
+            undecodable_streams: 0,
+        }
+    }
+
+    /// A page's single content stream, which could not be decoded.
+    fn one_undecodable_stream() -> Self {
+        Self {
+            data: Vec::new(),
+            undecodable_streams: 1,
+        }
+    }
+}
+
 /// What a backend had to drop while reading the document structure.
 ///
 /// Reported alongside the extracted text so a caller can tell "this document says
@@ -179,7 +210,20 @@ pub trait PdfBackend: Send + Sync {
     fn page_fonts(&self, page: PageId) -> Result<Vec<BackendFontInfo>>;
 
     /// Return the raw (decompressed) content stream bytes for a page.
+    ///
+    /// Fails when none of the page's content streams can be decoded. A page split across
+    /// several streams may still lose some of them here without failing --
+    /// [`page_content_with_losses`](Self::page_content_with_losses) reports those.
     fn page_content(&self, page: PageId) -> Result<Vec<u8>>;
+
+    /// Like [`page_content`](Self::page_content), but also reports content streams that
+    /// could not be decoded.
+    ///
+    /// Defaults to "nothing dropped" so a backend that cannot tell partial decoding apart
+    /// does not claim a loss it did not observe -- the same default as [`integrity`](Self::integrity).
+    fn page_content_with_losses(&self, page: PageId) -> Result<PageContent> {
+        self.page_content(page).map(PageContent::complete)
+    }
 
     /// Parse raw content stream bytes into a sequence of operations.
     fn decode_content(&self, data: &[u8]) -> Result<Vec<ContentOp>>;
@@ -260,13 +304,26 @@ pub struct RawBackend {
 impl RawBackend {
     /// Load from a file path.
     pub fn load_file<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
+        Self::load_file_with_password(path, None)
+    }
+
+    /// Load from a file path, offering `password` to an encrypted document.
+    pub fn load_file_with_password<P: AsRef<std::path::Path>>(
+        path: P,
+        password: Option<&str>,
+    ) -> Result<Self> {
         let data = std::fs::read(path).map_err(Error::Io)?;
-        Self::load_bytes(&data)
+        Self::load_bytes_with_password(&data, password)
     }
 
     /// Load from an in-memory byte slice.
     pub fn load_bytes(data: &[u8]) -> Result<Self> {
-        let doc = RawDocument::load(data)?;
+        Self::load_bytes_with_password(data, None)
+    }
+
+    /// Load from an in-memory byte slice, offering `password` to an encrypted document.
+    pub fn load_bytes_with_password(data: &[u8], password: Option<&str>) -> Result<Self> {
+        let doc = RawDocument::load_with_password(data, password)?;
         Ok(Self {
             doc,
             font_resolver: RawFontResolver::new(),
@@ -274,10 +331,18 @@ impl RawBackend {
     }
 
     /// Load from a reader.
-    pub fn load_reader<R: std::io::Read>(mut reader: R) -> Result<Self> {
+    pub fn load_reader<R: std::io::Read>(reader: R) -> Result<Self> {
+        Self::load_reader_with_password(reader, None)
+    }
+
+    /// Load from a reader, offering `password` to an encrypted document.
+    pub fn load_reader_with_password<R: std::io::Read>(
+        mut reader: R,
+        password: Option<&str>,
+    ) -> Result<Self> {
         let mut data = Vec::new();
         reader.read_to_end(&mut data)?;
-        Self::load_bytes(&data)
+        Self::load_bytes_with_password(&data, password)
     }
 
     /// Check if the document is encrypted.
@@ -306,16 +371,36 @@ impl PdfBackend for RawBackend {
     }
 
     fn page_content(&self, page_id: PageId) -> Result<Vec<u8>> {
+        // Without the loss count an empty result would read as an empty page, so losing
+        // every stream is an error on this path.
+        let content = self.page_content_with_losses(page_id)?;
+        if content.data.is_empty() && content.undecodable_streams > 0 {
+            return Err(Error::PdfParse(format!(
+                "none of the page's {} content stream(s) could be decoded",
+                content.undecodable_streams
+            )));
+        }
+        Ok(content.data)
+    }
+
+    fn page_content_with_losses(&self, page_id: PageId) -> Result<PageContent> {
         let page_dict = self
             .doc
             .get_dict(page_id)
             .map_err(|e| Error::PdfParse(e.to_string()))?;
 
-        let contents = raw_dict_get(page_dict, b"Contents")
-            .ok_or_else(|| Error::PdfParse("No Contents in page".to_string()))?;
+        // `/Contents` is optional: a page without it is empty by definition, not damaged,
+        // so there is nothing to fail and nothing lost to count.
+        let Some(contents) = raw_dict_get(page_dict, b"Contents") else {
+            return Ok(PageContent::complete(Vec::new()));
+        };
 
         let contents = self.doc.resolve(contents);
 
+        // A page's only content stream failing to decode is the same loss as one part of a
+        // content array failing (below), so it is counted the same way rather than failing
+        // here. A strict caller fails the page on the count; a lenient one keeps the page and
+        // reports it -- which an error at this point would have left it unable to do.
         match contents {
             RawPdfObject::Reference(n, g) => {
                 let obj = self
@@ -324,13 +409,20 @@ impl PdfBackend for RawBackend {
                     .ok_or_else(|| Error::PdfParse("Content stream not found".to_string()))?;
                 let resolved = self.doc.resolve(obj);
                 if let Some(stream) = resolved.as_stream() {
-                    return raw_stream::decompress(stream);
+                    return Ok(raw_stream::decompress(stream).map_or_else(
+                        |_| PageContent::one_undecodable_stream(),
+                        PageContent::complete,
+                    ));
                 }
                 Err(Error::PdfParse("Invalid content stream".to_string()))
             }
-            RawPdfObject::Stream(stream) => raw_stream::decompress(stream),
+            RawPdfObject::Stream(stream) => Ok(raw_stream::decompress(stream).map_or_else(
+                |_| PageContent::one_undecodable_stream(),
+                PageContent::complete,
+            )),
             RawPdfObject::Array(arr) => {
                 let mut content = Vec::new();
+                let mut undecodable_streams = 0;
                 for item in arr {
                     let resolved = self.doc.resolve(item);
                     let stream_obj = match resolved {
@@ -348,12 +440,20 @@ impl PdfBackend for RawBackend {
                         }
                         _ => continue,
                     };
-                    if let Ok(data) = raw_stream::decompress(stream_obj) {
-                        content.extend_from_slice(&data);
-                        content.push(b' ');
+                    // A part that cannot be decoded is left out and counted, not hidden:
+                    // the other parts still carry content, but the page is incomplete.
+                    match raw_stream::decompress(stream_obj) {
+                        Ok(data) => {
+                            content.extend_from_slice(&data);
+                            content.push(b' ');
+                        }
+                        Err(_) => undecodable_streams += 1,
                     }
                 }
-                Ok(content)
+                Ok(PageContent {
+                    data: content,
+                    undecodable_streams,
+                })
             }
             _ => Err(Error::PdfParse("Invalid content stream".to_string())),
         }
@@ -1762,6 +1862,60 @@ mod raw_backend_tests {
             .map(|op| op.operator)
             .collect();
         assert_eq!(operators, ["BT", "Tf", "Td", "Tj", "ET"]);
+    }
+
+    /// A page whose only content stream claims `/FlateDecode` over bytes no decoder accepts.
+    fn undecodable_backend() -> RawBackend {
+        use crate::parser::test_pdf::{pdf, stream};
+        let bytes = pdf(
+            vec![
+                b"<</Type/Catalog/Pages 2 0 R>>".to_vec(),
+                b"<</Type/Pages/Kids[3 0 R]/Count 1>>".to_vec(),
+                b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]/Contents 4 0 R>>".to_vec(),
+                // No zlib stream begins 0xFF 0xFF.
+                stream("<</Length 16/Filter/FlateDecode>>", &[0xFF; 16]),
+            ],
+            1,
+        );
+        RawBackend::load_bytes(&bytes).expect("the document structure is intact")
+    }
+
+    #[test]
+    fn an_undecodable_only_stream_is_counted_rather_than_an_error() {
+        let raw = undecodable_backend();
+        let content = raw.page_content_with_losses(raw.pages()[&1]).unwrap();
+        assert_eq!(content.data, Vec::<u8>::new());
+        assert_eq!(content.undecodable_streams, 1);
+    }
+
+    /// The plain accessor has no loss count to carry, so it must not turn "nothing could be
+    /// decoded" into an empty page.
+    #[test]
+    fn page_content_fails_when_no_stream_could_be_decoded() {
+        let raw = undecodable_backend();
+        assert!(raw.page_content(raw.pages()[&1]).is_err());
+    }
+
+    /// `/Contents` is optional -- its absence is an empty page, and nothing was lost.
+    #[test]
+    fn a_page_without_contents_is_empty_rather_than_an_error() {
+        use crate::parser::test_pdf::pdf;
+        let raw = RawBackend::load_bytes(&pdf(
+            vec![
+                b"<</Type/Catalog/Pages 2 0 R>>".to_vec(),
+                b"<</Type/Pages/Kids[3 0 R]/Count 1>>".to_vec(),
+                b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]>>".to_vec(),
+            ],
+            1,
+        ))
+        .expect("the document structure is intact");
+        let page = raw.pages()[&1];
+
+        assert_eq!(
+            raw.page_content_with_losses(page).unwrap(),
+            PageContent::complete(Vec::new())
+        );
+        assert_eq!(raw.page_content(page).unwrap(), Vec::<u8>::new());
     }
 
     #[test]

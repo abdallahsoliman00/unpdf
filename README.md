@@ -547,7 +547,10 @@ let markdown = render::to_markdown(&doc, &options)?;
 
 ### Handling Encrypted PDFs
 
-unpdf automatically decrypts PDFs that use empty user passwords (owner-password-only protection). For password-protected PDFs, provide the password:
+unpdf tries the empty user password first, which opens owner-password-only documents. When that
+does not authenticate, the password you supplied is tried; if it does not work either, the error
+is `ErrorKind::InvalidPassword` rather than `ErrorKind::Encrypted`, so "wrong password" and "no
+password given" stay distinguishable.
 
 ```rust
 use unpdf::{parse_file, parse_file_with_options, ParseOptions};
@@ -575,6 +578,34 @@ for field in &doc.form_fields {
     println!("{}: {}", field.name, field.display_value());
 }
 ```
+
+### Error Handling Defaults
+
+**Parsing is lenient by default.** A PDF that is damaged in one place still yields the pages
+and text that could be read, rather than failing whole. That is the useful default for a
+format where partial damage is common and a caller usually wants whatever survived.
+
+The cost of a lenient default is that a successful call can return less than the document
+held, so every kind of loss is counted rather than swallowed — see
+[Detecting Incomplete Extraction](#detecting-incomplete-extraction) below, and check
+`extraction_quality` on any result you intend to index or archive.
+
+Opt into failing instead:
+
+```rust
+use unpdf::{parse_file_with_options, ErrorMode, ParseOptions};
+
+let options = ParseOptions::new().with_error_mode(ErrorMode::Strict);
+let doc = parse_file_with_options("document.pdf", options)?;
+```
+
+Under `Strict` the same damage is an error: a content stream that cannot be decoded fails the
+document instead of leaving a shorter page. A page that legitimately has no content at all is
+not damage and stays a success in both modes.
+
+Its sibling parsers answer this differently, because the formats do: `unhwp` defaults to
+strict, and `undoc` has no error mode at all. Code that drives all three should not assume a
+shared default.
 
 ### Classifying Failures
 
@@ -627,6 +658,7 @@ if q.pages_incomplete {
 | `unresolved_page_nodes` | Unreadable page-tree *nodes*. Non-zero means incomplete — **not** a count of lost pages. |
 | `skipped_object_count` | Objects that could not be loaded. Most cost no page (fonts, annotations), so this alone does not imply missing text. |
 | `suppressed_text_runs` | Text runs the font decoder could not read and discarded. Non-zero means text is missing from an otherwise successful extraction. |
+| `undecodable_content_streams` | Page content streams that could not be decoded. Lenient parsing leaves them out and keeps the rest of the page — an empty page when it was the page's only stream — so non-zero means content is missing. Strict parsing fails instead. |
 | `unsupported_image_count` | Embedded images recognized as image XObjects but not extractable (unsupported color space/bit depth), so dropped. Distinguishes "no image" from "image present but couldn't be extracted". |
 | `ai_fallback_count` | Times VLM image understanding fell back to the non-AI result (transport failure, non-success status, malformed response, or retries exhausted). Only ever non-zero when AI parse options are configured; extraction still succeeds, so treat it as a quality signal, not a failure. The render-side refine pass is not counted here. |
 

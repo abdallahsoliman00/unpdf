@@ -46,6 +46,16 @@ pub struct ExtractionQuality {
     #[serde(default)]
     pub suppressed_text_runs: usize,
 
+    /// Page content streams that could not be decoded.
+    ///
+    /// A page's content can be one stream or several. Lenient parsing (the default)
+    /// leaves out a stream it cannot decode and keeps the rest of the page — an empty
+    /// page when that stream was the page's only one. The output then carries no trace
+    /// of what the stream held, so the count is reported: any non-zero value means
+    /// content is missing. Strict parsing fails instead of counting.
+    #[serde(default)]
+    pub undecodable_content_streams: usize,
+
     /// Whether pages are known to be missing from the output.
     ///
     /// `true` means the parser recovered what it could from a damaged document and some
@@ -160,6 +170,17 @@ impl ExtractionQuality {
                 "PDF is encrypted. Text extraction may be incomplete or unavailable.".to_string(),
             );
         }
+        // Ahead of the run count and the empty-text branch, for the same reason the run
+        // count sits ahead of the latter: a page whose only content stream could not be
+        // decoded has no text, and the empty-text message would offer guesses where this
+        // is an observation. A lost stream is also the coarser of the two losses.
+        if self.undecodable_content_streams > 0 {
+            return Some(format!(
+                "Left out {} content stream(s) that could not be decoded. Extracted \
+                 content is incomplete.",
+                self.undecodable_content_streams
+            ));
+        }
         // Ahead of the empty-text branch: that message lists "unsupported font
         // encoding" among several *guesses*, and a non-zero count here means we
         // observed exactly that and know it. Reporting the guess-list over the
@@ -226,6 +247,7 @@ pub struct QualityAccumulator {
     last_was_non_ws: bool,
     suppressed_ocr_pages: usize,
     suppressed_text_runs: usize,
+    undecodable_content_streams: usize,
     unsupported_image_count: usize,
     ai_fallback_count: usize,
 }
@@ -261,6 +283,11 @@ impl QualityAccumulator {
         self.suppressed_text_runs += runs;
     }
 
+    /// Record content streams a page could not decode and left out.
+    pub fn note_undecodable_content_streams(&mut self, streams: usize) {
+        self.undecodable_content_streams += streams;
+    }
+
     /// Record images a page recognized as image XObjects but could not extract.
     pub fn note_unsupported_images(&mut self, count: usize) {
         self.unsupported_image_count += count;
@@ -279,6 +306,7 @@ impl QualityAccumulator {
             replacement_char_count: self.replacement_char_count,
             suppressed_ocr_pages: self.suppressed_ocr_pages,
             suppressed_text_runs: self.suppressed_text_runs,
+            undecodable_content_streams: self.undecodable_content_streams,
             unsupported_image_count: self.unsupported_image_count,
             ai_fallback_count: self.ai_fallback_count,
             ..Default::default()

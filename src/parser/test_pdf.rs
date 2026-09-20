@@ -10,6 +10,11 @@
 /// Wraps `objects` -- numbered from 1, in the order given -- in a header, a cross-reference table
 /// and a trailer whose `/Root` is object `root`.
 pub(crate) fn pdf(objects: Vec<Vec<u8>>, root: usize) -> Vec<u8> {
+    pdf_with_trailer(objects, root, "")
+}
+
+/// As [`pdf`], with `extra` appended inside the trailer dictionary (`/Encrypt`, `/ID`, ...).
+pub(crate) fn pdf_with_trailer(objects: Vec<Vec<u8>>, root: usize, extra: &str) -> Vec<u8> {
     let mut out = b"%PDF-1.4\n".to_vec();
     let mut offsets = Vec::with_capacity(objects.len());
     for (idx, body) in objects.iter().enumerate() {
@@ -25,10 +30,32 @@ pub(crate) fn pdf(objects: Vec<Vec<u8>>, root: usize) -> Vec<u8> {
         out.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
     }
     out.extend_from_slice(
-        format!("trailer\n<</Size {size}/Root {root} 0 R>>\nstartxref\n{xref_start}\n%%EOF\n")
-            .as_bytes(),
+        format!(
+            "trailer\n<</Size {size}/Root {root} 0 R{extra}>>\nstartxref\n{xref_start}\n%%EOF\n"
+        )
+        .as_bytes(),
     );
     out
+}
+
+/// A document the standard security handler cannot open with any password: the `/U` hash is
+/// fixed bytes that no key derivation produces.
+///
+/// That is the point. Authentication failing either way is what isolates the question these
+/// tests ask -- *which* failure is reported -- from whether this crate can derive a key, which
+/// `crypt`'s own known-answer tests cover.
+pub(crate) fn undecryptable_pdf() -> Vec<u8> {
+    let hash = "(01234567890123456789012345678901)";
+    pdf_with_trailer(
+        vec![
+            b"<</Type/Catalog/Pages 2 0 R>>".to_vec(),
+            b"<</Type/Pages/Kids[3 0 R]/Count 1>>".to_vec(),
+            b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]>>".to_vec(),
+            format!("<</Filter/Standard/V 1/R 2/Length 40/P -1/O {hash}/U {hash}>>").into_bytes(),
+        ],
+        1,
+        "/Encrypt 4 0 R/ID[(0123456789abcdef)(0123456789abcdef)]",
+    )
 }
 
 /// A stream object's body: `dict`, then `data` between `stream` and `endstream`.

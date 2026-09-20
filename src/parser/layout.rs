@@ -382,6 +382,10 @@ pub struct LayoutAnalyzer<'a> {
     /// Reset on entry to `parse_operations`, like the operator counts above, so a
     /// re-analysed page reports the last pass rather than the sum of every pass.
     suppressed_text_runs: Cell<usize>,
+    /// Content streams of the page last analysed that could not be decoded.
+    ///
+    /// Set each time the page's content is read, so it reports the last pass.
+    undecodable_content_streams: Cell<usize>,
 }
 
 /// What a page's content stream says about how its text was produced.
@@ -582,6 +586,7 @@ impl<'a> LayoutAnalyzer<'a> {
             text_op_count: Cell::new(0),
             image_op_count: Cell::new(0),
             suppressed_text_runs: Cell::new(0),
+            undecodable_content_streams: Cell::new(0),
         }
     }
 
@@ -602,6 +607,13 @@ impl<'a> LayoutAnalyzer<'a> {
     /// the decoder could not read those runs and dropped them rather than emit noise.
     pub fn suppressed_text_runs(&self) -> usize {
         self.suppressed_text_runs.get()
+    }
+
+    /// Content streams of the page last analysed that could not be decoded.
+    ///
+    /// Non-zero means the page's output is missing whatever those streams held.
+    pub fn undecodable_content_streams(&self) -> usize {
+        self.undecodable_content_streams.get()
     }
 
     /// 마지막으로 분석한 페이지의 `(text_op_count, image_op_count)`.
@@ -673,7 +685,10 @@ impl<'a> LayoutAnalyzer<'a> {
             );
         }
 
-        let content = self.backend.page_content(*page_id)?;
+        let content = self.backend.page_content_with_losses(*page_id)?;
+        self.undecodable_content_streams
+            .set(content.undecodable_streams);
+        let content = content.data;
         let (spans, signals, grids) = self.parse_operations(&content, &fonts, *page_id)?;
 
         if self.suppress_low_confidence_ocr && signals.is_ocr_layer_over_scan() {

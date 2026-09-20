@@ -38,8 +38,20 @@ pub struct PageTreeScan {
 }
 
 impl RawDocument {
-    /// Load a PDF document from bytes.
+    /// Load a PDF document from bytes, decrypting with the empty user password only.
     pub fn load(data: &[u8]) -> Result<Self> {
+        Self::load_with_password(data, None)
+    }
+
+    /// Load a PDF document from bytes, offering `password` to an encrypted one.
+    ///
+    /// The empty password is always tried first: a document encrypted with an owner password
+    /// only opens with it, and that is the common case. A caller-supplied password is tried
+    /// when the empty one does not authenticate, and its failure is reported as
+    /// [`Error::InvalidPassword`] -- distinct from [`Error::Encrypted`], which means no
+    /// password was offered at all. The two send the caller in different directions: correct
+    /// the password, or go and get one.
+    pub fn load_with_password(data: &[u8], password: Option<&str>) -> Result<Self> {
         // 1. Parse PDF version from header: %PDF-X.Y
         let version = parse_version(data)?;
 
@@ -87,7 +99,7 @@ impl RawDocument {
         // Decrypt before ObjStm extraction: ObjStm streams are encrypted and must
         // be decrypted before their compressed content can be decompressed and parsed.
         if doc.is_encrypted() {
-            doc.try_decrypt()?;
+            doc.try_decrypt(password)?;
         }
 
         // Second pass: extract compressed objects from ObjStm streams (now decrypted).
@@ -118,8 +130,8 @@ impl RawDocument {
         Ok(doc)
     }
 
-    /// Attempt decryption with an empty user password (covers owner-password-only PDFs).
-    fn try_decrypt(&mut self) -> Result<()> {
+    /// Attempt decryption with the empty user password, then with `password` if given.
+    fn try_decrypt(&mut self, password: Option<&str>) -> Result<()> {
         let params = match self.encryption_params() {
             Some(p) => p,
             None => {
@@ -142,8 +154,20 @@ impl RawDocument {
             )));
         }
 
-        // Try empty password (most common case: owner-password-only)
-        let key = crypt::authenticate_user_password(&params, b"").ok_or(Error::Encrypted)?;
+        // Try the empty password first (most common case: owner-password-only), then the one
+        // the caller supplied. Order does not change the outcome -- whichever authenticates
+        // yields the same file key for the same document -- but it keeps every document that
+        // opened before opening exactly as it did.
+        let key = match crypt::authenticate_user_password(&params, b"") {
+            Some(key) => key,
+            None => match password.filter(|p| !p.is_empty()) {
+                // A password was offered and neither it nor the empty one worked. Saying
+                // `Encrypted` here would tell the caller to find a password they already gave.
+                Some(supplied) => crypt::authenticate_user_password(&params, supplied.as_bytes())
+                    .ok_or(Error::InvalidPassword)?,
+                None => return Err(Error::Encrypted),
+            },
+        };
 
         // Decrypt all objects (except the Encrypt dict itself)
         let encrypt_obj_id = dict_get(&self.trailer, b"Encrypt").and_then(|o| o.as_reference());
@@ -529,7 +553,55 @@ fn parse_int(data: &[u8], pos: usize) -> Result<(i64, usize)> {
 mod tests {
     use super::*;
     // Assembled in the test rather than read from disk -- see that module's docs.
-    use crate::parser::test_pdf::{one_page_pdf, pdf};
+    use crate::parser::test_pdf::{one_page_pdf, pdf, undecryptable_pdf};
+
+    /// `ParseOptions::with_password` existed, was threaded through every options struct and the
+    /// C ABI, and stopped one call short of the decryption it names: `RawDocument::load` had no
+    /// password parameter and `try_decrypt` passed `b""`. A caller could not tell a wrong
+    /// password from a missing one, because the one they gave was never tried (cycle-147).
+    #[test]
+    fn a_supplied_password_reaches_decryption_and_its_failure_is_named() {
+        let encrypted = undecryptable_pdf();
+
+        // `RawDocument` is not `Debug`, so no `unwrap_err`.
+        let Err(without) = RawDocument::load_with_password(&encrypted, None) else {
+            panic!("an encrypted document must not load without a password");
+        };
+        assert!(
+            matches!(without, Error::Encrypted),
+            "no password offered: the caller has to go and get one -- got {without}"
+        );
+
+        let Err(with) = RawDocument::load_with_password(&encrypted, Some("secret")) else {
+            panic!("this fixture authenticates with no password at all");
+        };
+        assert!(
+            matches!(with, Error::InvalidPassword),
+            "a password was offered and did not work: saying Encrypted would send the caller \
+             after a password they already gave -- got {with}"
+        );
+    }
+
+    /// An empty string is not a password. Treating it as one would report InvalidPassword for
+    /// a caller who supplied nothing, which is the same conflation in the other direction.
+    #[test]
+    fn an_empty_password_is_the_same_as_none() {
+        let encrypted = undecryptable_pdf();
+
+        let Err(err) = RawDocument::load_with_password(&encrypted, Some("")) else {
+            panic!("this fixture authenticates with no password at all");
+        };
+        assert!(matches!(err, Error::Encrypted), "got {err}");
+    }
+
+    /// The plain `load` keeps its old behaviour exactly: empty password only.
+    #[test]
+    fn load_without_a_password_still_reports_encrypted() {
+        let Err(err) = RawDocument::load(&undecryptable_pdf()) else {
+            panic!("this fixture authenticates with no password at all");
+        };
+        assert!(matches!(err, Error::Encrypted), "got {err}");
+    }
 
     #[test]
     fn a_minimal_document_reports_its_version_and_page_count() {

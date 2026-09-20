@@ -165,8 +165,10 @@ char* unpdf_get_author(const UnpdfDocument* doc);
  * Extraction quality diagnostics as a JSON object.
  *
  * Fields: char_count, word_count, replacement_char_count, encrypted,
- * is_scan_pdf, suppressed_ocr_pages, pages_incomplete, declared_page_count,
- * unresolved_page_nodes, skipped_object_count, unsupported_image_count.
+ * is_scan_pdf, suppressed_ocr_pages, suppressed_text_runs,
+ * undecodable_content_streams, pages_incomplete, declared_page_count,
+ * unresolved_page_nodes, skipped_object_count, unsupported_image_count,
+ * ai_fallback_count.
  * `is_scan_pdf` is true when sampled pages draw images with no text-showing
  * operators — the document-level "scanned document, OCR required" signal.
  * For page-level discrimination (mixed documents) use unpdf_page_stats.
@@ -182,6 +184,10 @@ char* unpdf_get_author(const UnpdfDocument* doc);
  * unsupported_image_count counts embedded images recognized as image XObjects
  * but dropped because their color space or bit depth isn't extractable —
  * distinguishes "no image" from "image present but couldn't be extracted".
+ * undecodable_content_streams counts page content streams that could not be
+ * decoded; lenient parsing leaves them out and keeps the rest of the page (an
+ * empty page when it was the only one), so any non-zero value means content is
+ * missing from an otherwise successful extraction.
  *
  * Fields are only ever added here, never removed or renamed; a consumer that
  * parses this JSON should ignore unknown fields.
@@ -192,7 +198,11 @@ char* unpdf_get_extraction_quality(const UnpdfDocument* doc);
 
 /**
  * Per-page content-stream operator statistics as a JSON object:
- * {"page":N,"text_op_count":N,"image_op_count":N,"ocr_text_suppressed":bool}
+ * {"page":N,"text_op_count":N,"image_op_count":N,"ocr_text_suppressed":bool,
+ *  "suppressed_text_runs":N,"undecodable_content_streams":N}
+ *
+ * The last two are this page's share of the document-level counts of the same
+ * name in unpdf_get_extraction_quality.
  *
  * text_op_count counts text-showing operators (Tj/TJ/'/"); image_op_count
  * counts XObject Do invocations (mostly images; may include form XObjects).

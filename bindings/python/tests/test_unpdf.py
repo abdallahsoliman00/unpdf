@@ -150,6 +150,25 @@ def _suppressed_text_run_pdf() -> bytes:
     ])
 
 
+def _undecodable_content_pdf() -> bytes:
+    """One page whose only content stream claims ``FlateDecode`` but holds bytes no
+    decoder accepts (no zlib header begins 0xFF 0xFF).
+
+    Mirrors ``undecodable_content_pdf`` in ``tests/common/mod.rs``.
+    """
+    not_flate = b"\xff" * 16
+    return _assemble([
+        b"<</Type/Catalog/Pages 2 0 R>>",
+        b"<</Type/Pages/Kids[3 0 R]/Count 1>>",
+        b"<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]"
+        b"/Resources<</Font<</F1 5 0 R>>>>/Contents 4 0 R>>",
+        _stream_object(
+            b"<</Length %d/Filter/FlateDecode>>" % len(not_flate), not_flate
+        ),
+        b"<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>",
+    ])
+
+
 def _jpeg_pdf(width: int, height: int) -> bytes:
     """One page with a single ``DCTDecode``-tagged image XObject of the given size.
 
@@ -359,6 +378,7 @@ class TestGetExtractionQuality:
         assert quality["declared_page_count"] == 1
         assert quality["unresolved_page_nodes"] == 0
         assert quality["skipped_object_count"] == 0
+        assert quality["undecodable_content_streams"] == 0
 
     def test_damaged_page_tree_reports_incomplete(self, tmp_path):
         """Silently dropped pages must be observable.
@@ -417,6 +437,17 @@ class TestGetPageStats:
         quality = unpdf.get_extraction_quality(str(pdf_file))
         assert stats["suppressed_text_runs"] > 0
         assert stats["suppressed_text_runs"] == quality["suppressed_text_runs"]
+
+    def test_undecodable_content_stream_is_reported(self, tmp_path):
+        """Lenient parsing keeps a page whose content stream cannot be decoded, as an
+        empty page — without this count the loss reads exactly like a blank page.
+        """
+        pdf_file = tmp_path / "undecodable.pdf"
+        pdf_file.write_bytes(_undecodable_content_pdf())
+        stats = unpdf.get_page_stats(str(pdf_file), 1)
+        quality = unpdf.get_extraction_quality(str(pdf_file))
+        assert stats["undecodable_content_streams"] == 1
+        assert quality["undecodable_content_streams"] == 1
 
 
 class TestDtoFieldCoverage:

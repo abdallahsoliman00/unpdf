@@ -119,7 +119,10 @@ jobs:
         # --all-targets covers tests, benches and examples. Without it clippy
         # lints only the library and binary targets, so lint debt accumulates
         # in exactly the code that is hardest to review.
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        # --workspace covers the cli and wasm crates. Without it clippy lints only
+        # the root package, which left two published crates unlinted -- the same
+        # gap `cargo test --workspace` on the line above had already closed.
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   # The manifest declares rust-version, and consumers build against it. Every
   # other job here runs on stable, where a raised floor is invisible -- which is

@@ -1,5 +1,72 @@
 # Changelog
 
+## Unreleased
+
+### Security
+
+- The lockfile moves `rustls` to 0.23.45 (RUSTSEC-2026-0285: TLS 1.3 handshake messages accepted
+  across encryption level boundaries, medium). It reaches this crate through `ureq` behind the
+  `ai` feature, so the released CLI binaries and any build with that feature carried it; a
+  library consumer resolving their own dependencies was never bound by this lockfile.
+
+### Documentation
+
+- `ExtractMode::TextOnly` is documented as behaving exactly like `Full`: nothing branches on
+  that variant, and only `StructureOnly` gates anything.
+
+### Fixed
+
+- `ErrorMode::Strict` now fails a page whose content is split across several streams when
+  one of those streams cannot be decoded. The undecodable stream was left out and the rest
+  of the page reported as complete — while a page whose only content stream could not be
+  decoded already failed under strict. Lenient parsing (the default) still keeps what the
+  other streams hold.
+- `ErrorMode::Strict` no longer fails a page that has no `/Contents` entry. The entry is
+  optional — such a page (form fields or annotations only, for instance) is empty, not
+  damaged — but it was reported as a parse error, and lenient parsing logged it as a
+  failed page.
+
+### Fixed
+
+- A password given to `ParseOptions::with_password` (or `ConvertOptions::with_password`, or the
+  C ABI's `password` field) is now offered to the document. It was carried through every
+  options struct and stopped one call short of decryption, which only ever tried the empty
+  password, so an encrypted document reported `Encrypted` whether or not the caller supplied a
+  password and no caller could tell that theirs was ignored. A wrong password is now reported as
+  `ErrorKind::InvalidPassword` (7), a discriminant published on every binding surface that
+  nothing had ever produced; `Encrypted` (6) keeps its meaning of "no password was offered".
+  The empty password is still tried first, so every document that opened before opens unchanged.
+
+### Added
+
+- `ErrorMode` and `ExtractMode` are re-exported at the crate root, alongside the
+  `ParseOptions` they configure. Naming the enum required reaching into `unpdf::parser`
+  while the struct it fills was already at the root.
+
+- `PdfBackend::page_content_with_losses`, returning the page's content together with the
+  number of content streams that could not be decoded (`PageContent`). It has a default
+  implementation, so existing backends are unaffected.
+- `ExtractionQuality::undecodable_content_streams` and `Page::undecodable_content_streams`:
+  page content streams that could not be decoded. Lenient parsing (the default) leaves such
+  a stream out and keeps the rest of the page — a page whose only content stream failed came
+  back empty — and nothing in the output said so. The count reaches the C ABI
+  (`unpdf_get_extraction_quality`, `unpdf_page_stats`), C# (`ExtractionQuality` /
+  `PageStats.UndecodableContentStreams`), Python, `warning_message()` and `unpdf info`.
+
+### Changed
+
+- The built-in backend's `page_content` now fails when none of a page's content streams can
+  be decoded. A page whose content array failed entirely used to return empty content, while
+  a page with a single failed stream already failed — both now behave the same.
+
+### Documentation
+
+- The README states the default error mode and what a lenient default costs. Parsing has
+  always been lenient by default, and a successful call can therefore return less than the
+  document held; that was only discoverable from the source. The section also points at the
+  `extraction_quality` fields that count each kind of loss, and notes that the sibling
+  parsers default differently.
+
 ## 0.19.0 — 2026-09-11
 
 ### Changed

@@ -79,6 +79,22 @@ public class IntrospectionTests
         Assert.Equal(1, quality.DeclaredPageCount);
         Assert.Equal(0, quality.UnresolvedPageNodes);
         Assert.Equal(0, quality.SkippedObjectCount);
+        Assert.Equal(0, quality.UndecodableContentStreams);
+    }
+
+    /// <summary>
+    /// Lenient parsing keeps a page whose content stream cannot be decoded, as an empty
+    /// page — without this count the loss reads exactly like a blank page.
+    /// </summary>
+    [Fact]
+    public void GetPageStats_UndecodableContentStream_ReportsIt()
+    {
+        using var doc = UnpdfDocument.ParseBytes(PdfFixtures.UndecodableContentPdf());
+        var stats = doc.GetPageStats(1);
+        var quality = doc.GetExtractionQuality();
+
+        Assert.Equal(1, stats.UndecodableContentStreams);
+        Assert.Equal(quality.UndecodableContentStreams, stats.UndecodableContentStreams);
     }
 
     /// <summary>
@@ -201,6 +217,25 @@ internal static class PdfFixtures
                 $"<</Type/XObject/Subtype/Image/Width {width}/Height {height}" +
                 "/ColorSpace/DeviceRGB/BitsPerComponent 8/Filter/DCTDecode/Length 4>>",
                 "ÿØÿÙ"),
+        });
+    }
+
+    /// <summary>
+    /// One page whose only content stream claims <c>FlateDecode</c> but holds bytes no
+    /// decoder accepts (no zlib header begins 0xFF 0xFF). Mirrors
+    /// <c>undecodable_content_pdf</c> in <c>tests/common/mod.rs</c>.
+    /// </summary>
+    public static byte[] UndecodableContentPdf()
+    {
+        var notFlate = new string('ÿ', 16);
+        return Assemble(new[]
+        {
+            "<</Type/Catalog/Pages 2 0 R>>",
+            "<</Type/Pages/Kids[3 0 R]/Count 1>>",
+            "<</Type/Page/Parent 2 0 R/MediaBox[0 0 595 842]" +
+                "/Resources<</Font<</F1 5 0 R>>>>/Contents 4 0 R>>",
+            StreamObject($"<</Length {notFlate.Length}/Filter/FlateDecode>>", notFlate),
+            "<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>",
         });
     }
 

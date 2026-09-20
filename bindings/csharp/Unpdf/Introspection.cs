@@ -60,6 +60,18 @@ public sealed class ExtractionQuality
     public long SuppressedTextRuns { get; init; }
 
     /// <summary>
+    /// Page content streams that could not be decoded.
+    /// <para>
+    /// Lenient parsing (the default) leaves such a stream out and keeps the rest of the
+    /// page — an empty page when it was the page's only stream, which otherwise reads
+    /// exactly like a blank page. Any non-zero value means content is missing from an
+    /// otherwise successful extraction. Strict parsing fails instead.
+    /// </para>
+    /// </summary>
+    [JsonPropertyName("undecodable_content_streams")]
+    public long UndecodableContentStreams { get; init; }
+
+    /// <summary>
     /// Whether pages are known to be missing from the output.
     /// <para>
     /// <c>true</c> means the parser recovered what it could from a damaged document and
@@ -170,4 +182,11 @@ public sealed class PageStats
     /// </summary>
     [JsonPropertyName("suppressed_text_runs")]
     public long SuppressedTextRuns { get; init; }
+
+    /// <summary>
+    /// Content streams of this page that could not be decoded. This page's share of
+    /// <see cref="ExtractionQuality.UndecodableContentStreams"/>.
+    /// </summary>
+    [JsonPropertyName("undecodable_content_streams")]
+    public long UndecodableContentStreams { get; init; }
 }

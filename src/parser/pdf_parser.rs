@@ -36,9 +36,13 @@ impl PdfParser {
         // Verify it's a PDF
         detect_format_from_path(path)?;
 
-        // Decryption (empty password) is attempted inside RawDocument::load().
-        // If we get here, the PDF is usable (either not encrypted, or decrypted).
-        let backend: Box<dyn PdfBackend> = Box::new(RawBackend::load_file(path)?);
+        // Decryption is attempted inside RawDocument::load_with_password(): the empty
+        // password first, then `options.password` if one was given. If we get here, the PDF
+        // is usable (either not encrypted, or decrypted).
+        let backend: Box<dyn PdfBackend> = Box::new(RawBackend::load_file_with_password(
+            path,
+            options.password.as_deref(),
+        )?);
 
         Ok(Self { backend, options })
     }
@@ -50,7 +54,10 @@ impl PdfParser {
 
     /// Parse a PDF from bytes with custom options.
     pub fn from_bytes_with_options(data: &[u8], options: ParseOptions) -> Result<Self> {
-        let backend: Box<dyn PdfBackend> = Box::new(RawBackend::load_bytes(data)?);
+        let backend: Box<dyn PdfBackend> = Box::new(RawBackend::load_bytes_with_password(
+            data,
+            options.password.as_deref(),
+        )?);
         Ok(Self { backend, options })
     }
 
@@ -61,7 +68,10 @@ impl PdfParser {
 
     /// Parse a PDF from a reader with custom options.
     pub fn from_reader_with_options<R: Read>(reader: R, options: ParseOptions) -> Result<Self> {
-        let backend: Box<dyn PdfBackend> = Box::new(RawBackend::load_reader(reader)?);
+        let backend: Box<dyn PdfBackend> = Box::new(RawBackend::load_reader_with_password(
+            reader,
+            options.password.as_deref(),
+        )?);
         Ok(Self { backend, options })
     }
 
@@ -254,6 +264,20 @@ pub(crate) fn parse_single_page(
         let (text_ops, image_ops) = analyzer.page_op_counts();
         page.text_op_count = text_ops;
         page.image_op_count = image_ops;
+
+        // A content stream that could not be decoded is content this page lost. Lenient
+        // keeps what the other streams hold; strict fails the page, exactly as it does
+        // when the page's only content stream cannot be decoded.
+        let undecodable = analyzer.undecodable_content_streams();
+        page.undecodable_content_streams = undecodable;
+        if undecodable > 0 {
+            if options.error_mode == ErrorMode::Strict {
+                return Err(Error::PdfParse(format!(
+                    "page {page_num}: {undecodable} content stream(s) could not be decoded"
+                )));
+            }
+            log::warn!("page {page_num}: left out {undecodable} undecodable content stream(s)");
+        }
     }
 
     // 이미지(XObject) 수집 — extract_resources 가 활성화된 경우.
