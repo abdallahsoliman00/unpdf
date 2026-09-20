@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Security
+
+- The lockfile moves `rustls` to 0.23.45 (RUSTSEC-2026-0285: TLS 1.3 handshake messages accepted
+  across encryption level boundaries, medium). It reaches this crate through `ureq` behind the
+  `ai` feature, so the released CLI binaries and any build with that feature carried it; a
+  library consumer resolving their own dependencies was never bound by this lockfile.
+
 ### Documentation
 
 - `ExtractMode::TextOnly` is documented as behaving exactly like `Full`: nothing branches on
