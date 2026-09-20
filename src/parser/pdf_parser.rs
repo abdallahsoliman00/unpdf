@@ -35,9 +35,13 @@ impl PdfParser {
         // Verify it's a PDF
         detect_format_from_path(path)?;
 
-        // Decryption (empty password) is attempted inside RawDocument::load().
-        // If we get here, the PDF is usable (either not encrypted, or decrypted).
-        let backend: Box<dyn PdfBackend> = Box::new(RawBackend::load_file(path)?);
+        // Decryption is attempted inside RawDocument::load_with_password(): the empty
+        // password first, then `options.password` if one was given. If we get here, the PDF
+        // is usable (either not encrypted, or decrypted).
+        let backend: Box<dyn PdfBackend> = Box::new(RawBackend::load_file_with_password(
+            path,
+            options.password.as_deref(),
+        )?);
 
         Ok(Self { backend, options })
     }
@@ -49,7 +53,10 @@ impl PdfParser {
 
     /// Parse a PDF from bytes with custom options.
     pub fn from_bytes_with_options(data: &[u8], options: ParseOptions) -> Result<Self> {
-        let backend: Box<dyn PdfBackend> = Box::new(RawBackend::load_bytes(data)?);
+        let backend: Box<dyn PdfBackend> = Box::new(RawBackend::load_bytes_with_password(
+            data,
+            options.password.as_deref(),
+        )?);
         Ok(Self { backend, options })
     }
 
@@ -60,7 +67,10 @@ impl PdfParser {
 
     /// Parse a PDF from a reader with custom options.
     pub fn from_reader_with_options<R: Read>(reader: R, options: ParseOptions) -> Result<Self> {
-        let backend: Box<dyn PdfBackend> = Box::new(RawBackend::load_reader(reader)?);
+        let backend: Box<dyn PdfBackend> = Box::new(RawBackend::load_reader_with_password(
+            reader,
+            options.password.as_deref(),
+        )?);
         Ok(Self { backend, options })
     }
 

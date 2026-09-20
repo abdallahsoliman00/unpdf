@@ -547,7 +547,10 @@ let markdown = render::to_markdown(&doc, &options)?;
 
 ### Handling Encrypted PDFs
 
-unpdf automatically decrypts PDFs that use empty user passwords (owner-password-only protection). For password-protected PDFs, provide the password:
+unpdf tries the empty user password first, which opens owner-password-only documents. When that
+does not authenticate, the password you supplied is tried; if it does not work either, the error
+is `ErrorKind::InvalidPassword` rather than `ErrorKind::Encrypted`, so "wrong password" and "no
+password given" stay distinguishable.
 
 ```rust
 use unpdf::{parse_file, parse_file_with_options, ParseOptions};

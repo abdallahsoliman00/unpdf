@@ -304,13 +304,26 @@ pub struct RawBackend {
 impl RawBackend {
     /// Load from a file path.
     pub fn load_file<P: AsRef<std::path::Path>>(path: P) -> Result<Self> {
+        Self::load_file_with_password(path, None)
+    }
+
+    /// Load from a file path, offering `password` to an encrypted document.
+    pub fn load_file_with_password<P: AsRef<std::path::Path>>(
+        path: P,
+        password: Option<&str>,
+    ) -> Result<Self> {
         let data = std::fs::read(path).map_err(Error::Io)?;
-        Self::load_bytes(&data)
+        Self::load_bytes_with_password(&data, password)
     }
 
     /// Load from an in-memory byte slice.
     pub fn load_bytes(data: &[u8]) -> Result<Self> {
-        let doc = RawDocument::load(data)?;
+        Self::load_bytes_with_password(data, None)
+    }
+
+    /// Load from an in-memory byte slice, offering `password` to an encrypted document.
+    pub fn load_bytes_with_password(data: &[u8], password: Option<&str>) -> Result<Self> {
+        let doc = RawDocument::load_with_password(data, password)?;
         Ok(Self {
             doc,
             font_resolver: RawFontResolver::new(),
@@ -318,10 +331,18 @@ impl RawBackend {
     }
 
     /// Load from a reader.
-    pub fn load_reader<R: std::io::Read>(mut reader: R) -> Result<Self> {
+    pub fn load_reader<R: std::io::Read>(reader: R) -> Result<Self> {
+        Self::load_reader_with_password(reader, None)
+    }
+
+    /// Load from a reader, offering `password` to an encrypted document.
+    pub fn load_reader_with_password<R: std::io::Read>(
+        mut reader: R,
+        password: Option<&str>,
+    ) -> Result<Self> {
         let mut data = Vec::new();
         reader.read_to_end(&mut data)?;
-        Self::load_bytes(&data)
+        Self::load_bytes_with_password(&data, password)
     }
 
     /// Check if the document is encrypted.

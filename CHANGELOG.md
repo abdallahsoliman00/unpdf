@@ -14,6 +14,17 @@
   damaged — but it was reported as a parse error, and lenient parsing logged it as a
   failed page.
 
+### Fixed
+
+- A password given to `ParseOptions::with_password` (or `ConvertOptions::with_password`, or the
+  C ABI's `password` field) is now offered to the document. It was carried through every
+  options struct and stopped one call short of decryption, which only ever tried the empty
+  password, so an encrypted document reported `Encrypted` whether or not the caller supplied a
+  password and no caller could tell that theirs was ignored. A wrong password is now reported as
+  `ErrorKind::InvalidPassword` (7), a discriminant published on every binding surface that
+  nothing had ever produced; `Encrypted` (6) keeps its meaning of "no password was offered".
+  The empty password is still tried first, so every document that opened before opens unchanged.
+
 ### Added
 
 - `ErrorMode` and `ExtractMode` are re-exported at the crate root, alongside the
