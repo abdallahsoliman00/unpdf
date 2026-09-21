@@ -921,6 +921,11 @@ impl<'a> LayoutAnalyzer<'a> {
                         }
                     };
 
+                    let (tx, ty) = text_matrix.get_position();
+                    let (x, y) = apply_ctm(&ctm, tx, ty);
+                    let effective_size =
+                        current_font_size * text_matrix.get_scale() * ctm_y_scale(&ctm);
+
                     if !text.trim().is_empty() {
                         count_render_mode(
                             &text,
@@ -928,19 +933,10 @@ impl<'a> LayoutAnalyzer<'a> {
                             &mut total_chars,
                             &mut invisible_chars,
                         );
-                        let (tx, ty) = text_matrix.get_position();
-                        let (x, y) = apply_ctm(&ctm, tx, ty);
-                        let effective_size =
-                            current_font_size * text_matrix.get_scale() * ctm_y_scale(&ctm);
-                        let mut span = TextSpan::new(
-                            text,
-                            x,
-                            y,
-                            effective_size,
-                            current_font.clone(),
-                        );
-                        span.width = estimate_text_width(&span.text, effective_size);
+                        let span = TextSpan::new(text, x, y, effective_size, current_font.clone());
                         spans.push(span);
+                    } else if text.chars().any(char::is_whitespace) {
+                        attach_word_space(&mut spans, y, effective_size);
                     }
                 }
                 "'" | "\"" => {
@@ -953,6 +949,11 @@ impl<'a> LayoutAnalyzer<'a> {
                             note_suppression(&decoded, &mut suppressed_runs);
                             let text = decoded.text;
 
+                            let (tx, ty) = text_matrix.get_position();
+                            let (x, y) = apply_ctm(&ctm, tx, ty);
+                            let effective_size =
+                                current_font_size * text_matrix.get_scale() * ctm_y_scale(&ctm);
+
                             if !text.trim().is_empty() {
                                 count_render_mode(
                                     &text,
@@ -960,10 +961,6 @@ impl<'a> LayoutAnalyzer<'a> {
                                     &mut total_chars,
                                     &mut invisible_chars,
                                 );
-                                let (tx, ty) = text_matrix.get_position();
-                                let (x, y) = apply_ctm(&ctm, tx, ty);
-                                let effective_size =
-                                    current_font_size * text_matrix.get_scale() * ctm_y_scale(&ctm);
                                 spans.push(TextSpan::new(
                                     text,
                                     x,
@@ -971,6 +968,8 @@ impl<'a> LayoutAnalyzer<'a> {
                                     effective_size,
                                     current_font.clone(),
                                 ));
+                            } else if text.chars().any(char::is_whitespace) {
+                                attach_word_space(&mut spans, y, effective_size);
                             }
                         }
                     }
@@ -1210,7 +1209,7 @@ impl<'a> LayoutAnalyzer<'a> {
             .map(|s| super::xycut::Block {
                 x: s.x,
                 y: s.y,
-                width: s.width,
+                width: estimate_text_width(&s.text, s.font_size),
                 height: s.font_size,
             })
             .collect();
@@ -1359,6 +1358,16 @@ impl<'a> LayoutAnalyzer<'a> {
         // This fixes the "w arranty", "M ac B ook" splitting caused by
         // per-character text rendering in some PDFs.
         spans = merge_fragmented_spans(spans);
+
+        // Widths are needed downstream by `should_insert_space_between` and by table
+        // detection, but they must be assigned *after* merging: `merge_fragmented_spans`
+        // uses `width == 0.0` as its "unmeasured fragment" signal. The estimate is also
+        // only ever used as a plausible bounding box — it is not an advance width.
+        for span in &mut spans {
+            if span.width <= 0.0 {
+                span.width = estimate_text_width(&span.text, span.font_size);
+            }
+        }
 
         let mut lines: Vec<TextLine> = Vec::new();
         let mut current_line_spans: Vec<TextSpan> = Vec::new();
@@ -1958,8 +1967,7 @@ fn should_insert_space_between(prev_span: &TextSpan, span: &TextSpan) -> bool {
     // Don't double up when either side already carries whitespace
     let prev_ends_with_space =
         prev_span.text.ends_with(' ') || prev_span.text.ends_with('\u{00A0}');
-    let curr_starts_with_space =
-        span.text.starts_with(' ') || span.text.starts_with('\u{00A0}');
+    let curr_starts_with_space = span.text.starts_with(' ') || span.text.starts_with('\u{00A0}');
     !prev_ends_with_space && !curr_starts_with_space
 }
 
@@ -2012,6 +2020,38 @@ fn estimate_text_width(text: &str, font_size: f32) -> f32 {
         })
         .sum();
     ems * font_size
+}
+
+/// Attach an inter-word space to the most recent span.
+///
+/// Some producers (Word/LibreOffice exports) emit
+/// each word as its own `BT … ET` object and put the word gaps in
+/// whitespace-only text runs such as `[( )] TJ`. Those runs carry no content of
+/// their own, but they are the only in-band evidence of the gap: `span.width`
+/// is an estimate and cannot reliably recover it. Append a single space to the
+/// preceding run on the same baseline instead of dropping the whitespace run.
+fn attach_word_space(spans: &mut [TextSpan], y: f32, font_size: f32) {
+    let Some(prev) = spans.last_mut() else {
+        return;
+    };
+
+    // A whitespace run that opens a line is indentation, not a word gap: only
+    // join it to a run on the same baseline.
+    if (prev.y - y).abs() > font_size.max(prev.font_size) * 0.3 {
+        return;
+    }
+
+    // Don't accumulate spaces.
+    if prev.text.ends_with(' ') || prev.text.ends_with('\u{00A0}') {
+        return;
+    }
+
+    prev.text.push(' ');
+    // Keep the estimated extent consistent with the appended glyph. Under
+    // Fix 2 parse-time widths are 0, so this is a no-op until after merging.
+    if prev.width > 0.0 {
+        prev.width += estimate_text_width(" ", prev.font_size);
+    }
 }
 
 /// Merge adjacent fragmented spans that likely form words.
@@ -2083,6 +2123,12 @@ fn merge_fragmented_spans(spans: Vec<TextSpan>) -> Vec<TextSpan> {
             let new_end = span.x + span.font_size * 0.6 * span.text.chars().count() as f32;
             prev.width = new_end - prev.x;
             prev.text.push_str(&span.text);
+
+            // A merged fragment that now ends in a word space is a completed word:
+            // don't let the next fragment chain onto it.
+            if let Some(flag) = was_fragment.last_mut() {
+                *flag = !prev.text.ends_with(char::is_whitespace);
+            }
         } else {
             was_fragment.push(is_fragment);
             result.push(span);
@@ -2410,6 +2456,58 @@ mod tests {
         let merged = merge_fragmented_spans(spans);
         // Should not merge because fragmentation threshold is not met
         assert_eq!(merged.len(), 2);
+    }
+
+    #[test]
+    fn test_attach_word_space_appends_once_on_the_same_baseline() {
+        let mut spans = vec![TextSpan::new(
+            "Hello".to_string(),
+            0.0,
+            500.0,
+            12.0,
+            "Helvetica".to_string(),
+        )];
+
+        attach_word_space(&mut spans, 500.0, 12.0);
+        assert_eq!(spans[0].text, "Hello ");
+
+        attach_word_space(&mut spans, 500.0, 12.0);
+        assert_eq!(spans[0].text, "Hello ", "must not accumulate spaces");
+    }
+
+    #[test]
+    fn test_attach_word_space_ignores_a_different_baseline() {
+        let mut spans = vec![TextSpan::new(
+            "Hello".to_string(),
+            0.0,
+            500.0,
+            12.0,
+            "Helvetica".to_string(),
+        )];
+
+        attach_word_space(&mut spans, 400.0, 12.0);
+        assert_eq!(spans[0].text, "Hello", "indentation is not a word gap");
+    }
+
+    #[test]
+    fn test_merge_fragmented_spans_does_not_absorb_after_a_word_space() {
+        let chars = ["H", "e", "l", "l", "o ", "W"];
+        let xs = [0.0, 6.0, 12.0, 18.0, 24.0, 40.0];
+        let spans: Vec<TextSpan> = chars
+            .iter()
+            .zip(xs)
+            .map(|(c, x)| TextSpan::new(c.to_string(), x, 500.0, 12.0, "Helvetica".to_string()))
+            .collect();
+
+        let merged = merge_fragmented_spans(spans);
+
+        assert_eq!(
+            merged.len(),
+            2,
+            "a fragment ending in a space is a finished word"
+        );
+        assert_eq!(merged[0].text, "Hello ");
+        assert_eq!(merged[1].text, "W");
     }
 
     #[test]
